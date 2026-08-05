@@ -141,10 +141,89 @@ reward_model:
   ulysses_sequence_parallel_size: 1 # sp size
   use_dynamic_bsz: ${critic.use_dynamic_bsz}
   forward_max_token_len_per_gpu: ${critic.forward_max_token_len_per_gpu}
-  structure_format_score: 0
-  final_format_score: 0
-  retrieval_score: 0
-  decomposition_bonus: 0  # bonus for using decomposition when it helps
+
+  # ---------------------------------------------------------------------------
+  # Rule-based reward, read by verl/trainer/main_ppo.py. Everything below used to
+  # be hardcoded in main_ppo.py / qa_em.py; the values here are exactly what that
+  # code already used, so lifting them into config changes no scores. They are
+  # here so they are CLI-overridable and land in the W&B run config (ray_trainer
+  # passes the resolved config to wandb.init).
+  #
+  # NOTE: the four *_score keys below were previously 0 and dead -- nothing in
+  # main_ppo.py read them. They now carry main_ppo.py's real values. The only
+  # other reader is main_ppo_format.py, and its callers
+  # (scripts/nq_hotpotqa/v0.3/train_{grpo,ppo}_format.sh) override the first
+  # three on the CLI, so they are unaffected.
+  # ---------------------------------------------------------------------------
+  structure_format_score: 0.2
+  final_format_score: 0.1
+  retrieval_score: 0.1
+  decomposition_bonus: 0.0  # bonus for using decomposition when it helps
+
+  # Train reward = EM + answerability + decomposition; validation stays plain EM
+  # (no format shaping) so val numbers remain comparable across reward configs.
+  # These two are NOT symmetric -- collapsing them into one key would start
+  # applying format shaping to validation and shift every val EM number.
+  use_answerability: true
+  val_use_answerability: false
+  add_format: true
+  val_add_format: false
+
+  num_examine: 0        # reasoning traces printed per data source, train
+  val_num_examine: 1    # ... and validation
+
+  method: strict
+  format_score: 0.0
+  score: 1.0
+
+  # r_intermediate = w_ans * r_answerability + w_dec * r_decomposition
+  intermediate:
+    answerability_weight: 0.5
+    decomposition_weight: 0.5
+
+  # alpha/beta scheduling for the intermediate reward bonus.
+  schedule:
+    alpha: 0.8
+    beta: 0.2
+    alpha_warmup_steps: 200
+    scheduler_type: smart   # smart | linear
+    beta_decay_steps: 2000
+    min_beta: 0.02
+    adaptive_beta: true
+    ema_decay: 0.98
+    target_em: 0.65
+    ema_slope_tol: 5e-4
+    adaptive_rate: 0.2
+    max_beta_step: 0.01
+
+  # _score_decomposition weights.
+  decomposition:
+    coeff_identical_to_parent: 0.85  # cosine sim a single rephrased query should hit
+    coeff_coverage: 0.5
+    coeff_dissimilar: 0.5
+
+  answerability:
+    first_k: 3  # docs scored per subquery
+
+  judge:
+    model_name: sentence-transformers/all-MiniLM-L12-v2
+    device: cpu
+    threshold: 0.35
+    batch_size: 32
+
+  log_sample_rate: 64  # 1-in-N sampling for reward trace prints
+
+  data_sources:
+    - nq
+    - triviaqa
+    - popqa
+    - hotpotqa
+    - 2wikimultihopqa
+    - musique
+    - bamboogle
+    # negation-focused splits of combined_nq_hotpot_nevir_negfree_upsampled
+    - nevir-with-answers
+    - negations-free-sentence-with-answer
 
 retriever:
   url: "http://127.0.0.1:8000/retrieve"

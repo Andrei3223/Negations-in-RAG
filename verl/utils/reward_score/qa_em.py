@@ -17,6 +17,7 @@ import string
 import random
 import threading
 import math
+import warnings
 
 
 from sentence_transformers import SentenceTransformer, util
@@ -177,11 +178,13 @@ def compute_r_answerability(
     judge_fn,
     doc_char_limit: int = 1200,
     first_k: int = 3,
+    batch_size: int = 32,
+    log_sample_rate: int = 64,
 ):
     queries_tree = extract_all_search_queries(solution_str)      
     docs_tree = extract_all_information_blocks(solution_str)     
     
-    do_print = random.randint(1, 64) == 1
+    do_print = random.randint(1, log_sample_rate) == 1
     
     if not queries_tree or not docs_tree:
         return 0.0
@@ -222,8 +225,8 @@ def compute_r_answerability(
             doc_list = list(unique_docs)
             
             # CRITICAL FIX: Use small batch_size to prevent VRAM spikes
-            subq_embs = model.encode(subq_list, batch_size=32, convert_to_tensor=True, normalize_embeddings=True)
-            doc_embs = model.encode(doc_list, batch_size=32, convert_to_tensor=True, normalize_embeddings=True)
+            subq_embs = model.encode(subq_list, batch_size=batch_size, convert_to_tensor=True, normalize_embeddings=True)
+            doc_embs = model.encode(doc_list, batch_size=batch_size, convert_to_tensor=True, normalize_embeddings=True)
             
             subq_emb_dict = {q: subq_embs[i] for i, q in enumerate(subq_list)}
             doc_emb_dict = {d: doc_embs[i] for i, d in enumerate(doc_list)}
@@ -267,7 +270,7 @@ def compute_r_answerability(
     return sum(step_scores) / len(step_scores) if step_scores else 0.0
 
 
-def add_formatting(reward_score, solution_str, ground_truth, method='strict', structure_format_score=0, final_format_score=0, retrieval_score=0, format_score=0, score=1., decomposition_bonus=0.):
+def add_formatting(reward_score, solution_str, ground_truth, method='strict', structure_format_score=0, final_format_score=0, retrieval_score=0, format_score=0, score=1., decomposition_bonus=0., log_sample_rate=64):
     """The scoring function for exact match (EM).
 
     Args:
@@ -287,7 +290,7 @@ def add_formatting(reward_score, solution_str, ground_truth, method='strict', st
     # used_decomposition, decomposition_helped = check_decomposition_usage(solution_str)
     
     answer = extract_solution(solution_str=solution_str)
-    do_print = random.randint(1, 64) == 1
+    do_print = random.randint(1, log_sample_rate) == 1
     
     if do_print:
         print(f"--------------------------------")
@@ -324,7 +327,7 @@ def add_formatting(reward_score, solution_str, ground_truth, method='strict', st
             else:
                 return final_format_score
 
-def compute_score_em(solution_str, ground_truth, training_step=0, method='strict', format_score=0., score=1., add_format=True, structure_format_score=0.2, final_format_score=0.1, retrieval_score=0.1, decomposition_bonus=0.0):
+def compute_score_em(solution_str, ground_truth, training_step=0, method='strict', format_score=0., score=1., add_format=True, structure_format_score=0.2, final_format_score=0.1, retrieval_score=0.1, decomposition_bonus=0.0, log_sample_rate=64):
     """The scoring function for exact match (EM).
 
     Args:
@@ -335,7 +338,7 @@ def compute_score_em(solution_str, ground_truth, training_step=0, method='strict
         score: the score for the correct answer
     """
     answer = extract_solution(solution_str=solution_str)
-    do_print = random.randint(1, 64) == 1
+    do_print = random.randint(1, log_sample_rate) == 1
     
     if answer is None:
         em_result = False
@@ -353,7 +356,8 @@ def compute_score_em(solution_str, ground_truth, training_step=0, method='strict
             structure_format_score=structure_format_score,
             final_format_score=final_format_score,
             retrieval_score=retrieval_score,
-            decomposition_bonus=decomposition_bonus
+            decomposition_bonus=decomposition_bonus,
+            log_sample_rate=log_sample_rate
         )
 
     if do_print:
@@ -380,13 +384,28 @@ def set_judge_fn(judge_fn):
     _JUDGE_FN = judge_fn
 
 def _get_judge_fn():
-    """Get the global judge function (initialize lazily if needed)."""
+    """Get the global judge function (initialize lazily if needed).
+
+    The lazy fallback builds a *different* judge from the one main_ppo.py
+    configures (L6 here vs reward_model.judge.model_name, default L12), so
+    silently falling back would score against the wrong model. It never fires in
+    the training pipeline -- main_task calls set_judge_fn() before the trainer is
+    built -- so warn loudly rather than raise, to avoid adding a new crash path.
+    """
     global _JUDGE_FN
     if _JUDGE_FN is None:
+        warnings.warn(
+            "qa_em.set_judge_fn() was never called; falling back to "
+            "all-MiniLM-L6-v2, which is NOT the model configured in "
+            "reward_model.judge.model_name. Reward scores from this process are "
+            "not comparable to a normally-configured run.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         _JUDGE_FN = init_mpnet_judge(
             # model_name="sentence-transformers/all-mpnet-base-v2",
             model_name="sentence-transformers/all-MiniLM-L6-v2",
-            device="cpu", 
+            device="cpu",
             threshold=0.35,
         )
     return _JUDGE_FN
@@ -424,19 +443,25 @@ def init_mpnet_judge(
     judge_fn.threshold = threshold
     return judge_fn
 
-def _score_decomposition(parent_emb, children_embs):
+def _score_decomposition(
+    parent_emb,
+    children_embs,
+    coeff_identical_to_parent: float = 0.85,
+    coeff_coverage: float = 0.5,
+    coeff_disimilar: float = 0.5,
+):
     """
     Score a single decomposition step.
 
-    If one child: rephrase reward — peaks at cosine sim ~0.85, 
+    If one child: rephrase reward — peaks at cosine sim ~coeff_identical_to_parent,
                   falls off if too similar or too different.
-    If multiple children: 0.5 * coverage + 0.5 * part_score
+    If multiple children: coeff_coverage * coverage + coeff_disimilar * part_score
       - coverage: centroid of children vs parent
       - part_score: each child relevant to parent but distinct from siblings (leave-one-out)
-    """
-    coeff_identical_to_parent = 0.85
-    coeff_coverage, coeff_disimilar = 0.5, 0.5
 
+    Defaults match the values that were hardcoded here before these became
+    configurable via reward_model.decomposition.* -- do not change them.
+    """
     if len(children_embs) == 1:
         # Decomposition one:
         sim = torch.dot(parent_emb, children_embs[0]).item()
@@ -570,7 +595,11 @@ def _adaptive_beta_gate(
       - Always respect [min_beta, beta_init] and per-step max change.
     """
     if not adaptive_beta:
-        return beta_t
+        # Must match the 4-tuple returned below: the caller unpacks four values.
+        # Returning a bare float here raised "cannot unpack non-iterable float
+        # object" -- unreachable while adaptive_beta was hardcoded True, but
+        # reachable now that reward_model.schedule.adaptive_beta is configurable.
+        return beta_t, None, None, "disabled"
 
     ema, slope = _update_answer_ema(r_answer, ema_decay)
 
@@ -601,6 +630,11 @@ def compute_r_decomposition(
     solution_str: str,
     original_query: str,
     judge_fn,
+    batch_size: int = 32,
+    log_sample_rate: int = 64,
+    coeff_identical_to_parent: float = 0.85,
+    coeff_coverage: float = 0.5,
+    coeff_disimilar: float = 0.5,
 ):
     """
     Reward for query decomposition quality at each search step.
@@ -623,12 +657,12 @@ def compute_r_decomposition(
 
     with torch.no_grad():
         str_list = list(unique_strings)
-        embs = model.encode(str_list, batch_size=32, convert_to_tensor=True, normalize_embeddings=True)
+        embs = model.encode(str_list, batch_size=batch_size, convert_to_tensor=True, normalize_embeddings=True)
         emb_dict = {s: embs[i] for i, s in enumerate(str_list)}
 
     parent_emb = emb_dict[original_query]
 
-    do_print = random.randint(1, 64) == 1
+    do_print = random.randint(1, log_sample_rate) == 1
     step_scores = []
     for subqueries in queries_tree:
         children_embs_list = [emb_dict[q] for q in subqueries if q in emb_dict]
@@ -636,7 +670,13 @@ def compute_r_decomposition(
             continue
 
         children_embs = torch.stack(children_embs_list)
-        score = _score_decomposition(parent_emb, children_embs)
+        score = _score_decomposition(
+            parent_emb,
+            children_embs,
+            coeff_identical_to_parent=coeff_identical_to_parent,
+            coeff_coverage=coeff_coverage,
+            coeff_disimilar=coeff_disimilar,
+        )
         step_scores.append(score)
 
         if do_print:
@@ -863,16 +903,28 @@ def compute_score_em_plus_answerability_decomposition(
     final_format_score: float = 0.1,
     retrieval_score: float = 0.1,
     decomposition_bonus: float = 0.0,
+    answerability_weight: float = 0.5,
+    decomposition_weight: float = 0.5,
+    answerability_first_k: int = 3,
+    judge_batch_size: int = 32,
+    log_sample_rate: int = 64,
+    decomp_coeff_identical_to_parent: float = 0.85,
+    decomp_coeff_coverage: float = 0.5,
+    decomp_coeff_disimilar: float = 0.5,
 ):
     """
     Combined reward:
-      r = r_answer + beta * (0.5 * r_answerability + 0.5 * r_decomposition) * (1 - r_answer)
+      r = r_answer + beta * (w_ans * r_answerability + w_dec * r_decomposition) * (1 - r_answer)
 
     Where:
       r_answer in {0, 1} — exact match on final answer
       r_answerability in [0, 1] — do retrieved docs answer the subqueries
       r_decomposition in [0, 1] — quality of query decomposition at each search step
       beta controls max bonus for good intermediate behavior on a failed answer
+
+    Every default here is the value this function already used before these knobs
+    became configurable via the reward_model.* config section, so calling it with
+    defaults reproduces the previous scores exactly.
     """
     # 1) Final answer reward
     r_answer = compute_score_em(
@@ -890,6 +942,9 @@ def compute_score_em_plus_answerability_decomposition(
     r_answerability = compute_r_answerability(
         solution_str=solution_str,
         judge_fn=judge_fn,
+        first_k=answerability_first_k,
+        batch_size=judge_batch_size,
+        log_sample_rate=log_sample_rate,
     )
 
     # 3) Decomposition reward
@@ -898,10 +953,15 @@ def compute_score_em_plus_answerability_decomposition(
         solution_str=solution_str,
         original_query=original_query,
         judge_fn=judge_fn,
+        batch_size=judge_batch_size,
+        log_sample_rate=log_sample_rate,
+        coeff_identical_to_parent=decomp_coeff_identical_to_parent,
+        coeff_coverage=decomp_coeff_coverage,
+        coeff_disimilar=decomp_coeff_disimilar,
     )
 
     # 4) Combine
-    r_intermediate = 0.5 * r_answerability + 0.5 * r_decomposition
+    r_intermediate = answerability_weight * r_answerability + decomposition_weight * r_decomposition
     sample_id = get_sample_id()
     # print(f"[{sample_id}] r_answer={r_answer:.4f}  r_answerability={r_answerability:.4f}  r_decomposition={r_decomposition:.4f}  r_intermediate={r_intermediate:.4f}")
 
