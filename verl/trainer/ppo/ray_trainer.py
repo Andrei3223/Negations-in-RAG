@@ -634,6 +634,51 @@ class RayPPOTrainer(object):
                 self.config.trainer.default_hdfs_dir, 'critic')
             self.critic_wg.save_checkpoint(critic_local_path, critic_remote_path)
 
+        # Driver-side state that lives outside the workers: the step counter, and the
+        # reward's adaptive-beta EMA (module-level state in qa_em, otherwise lost on
+        # restart so beta jumps back to its initial value).
+        import torch
+        from verl.utils.reward_score import qa_em
+        torch.save(
+            {
+                'global_steps': self.global_steps,
+                'reward_scheduler_state': dict(getattr(qa_em, '_SCHEDULER_STATE', {})),
+            }, os.path.join(actor_local_path, 'trainer_state.pt'))
+
+        # Pointer to the newest checkpoint so resume='auto' need not guess, and so a
+        # partially written directory is never selected (this is written last).
+        try:
+            with open(os.path.join(self.config.trainer.default_local_dir, 'latest_checkpoint.txt'), 'w') as f:
+                f.write(actor_local_path)
+        except OSError as exc:
+            print(f'WARNING: could not write latest_checkpoint.txt: {exc}')
+
+    def _resume_from_checkpoint(self, ckpt_path):
+        """Restore optimizer, LR schedule, step counter and reward-EMA from ckpt_path.
+
+        Weights are NOT loaded here: main_ppo points actor_rollout_ref.model.path at
+        this same directory before the workers are built, so the model comes up with
+        the checkpointed parameters already.
+        """
+        import torch
+        from verl.utils.reward_score import qa_em
+
+        self.actor_rollout_wg.load_optimizer_checkpoint(ckpt_path)
+
+        state_path = os.path.join(ckpt_path, 'trainer_state.pt')
+        if not os.path.exists(state_path):
+            print(f'[resume] no trainer_state.pt in {ckpt_path}; keeping global_steps=0. '
+                  f'Weights and optimizer are restored but the step counter, LR position '
+                  f'and reward EMA are not.')
+            return
+        state = torch.load(state_path, map_location='cpu', weights_only=False)
+        self.global_steps = int(state.get('global_steps', 0))
+        sched = state.get('reward_scheduler_state') or {}
+        if sched and hasattr(qa_em, '_SCHEDULER_STATE'):
+            qa_em._SCHEDULER_STATE.update(sched)
+        print(f'[resume] resuming from {ckpt_path} at global_step {self.global_steps} '
+              f'(reward EMA {sched.get("ema")})')
+
     def _balance_batch(self, batch: DataProto, metrics, logging_prefix='global_seqlen'):
         """Reorder the data on single controller such that each dp rank gets similar total tokens"""
         attention_mask = batch.batch['attention_mask']
@@ -660,6 +705,14 @@ class RayPPOTrainer(object):
 
         logger = self.logger
         self.global_steps = 0
+
+        # Resume before validating, so global_steps and the LR position are correct
+        # for anything logged below. resolve_resume_path() in main_ppo has already
+        # pointed model.path at this directory, so the weights are loaded.
+        resume_path = self.config.trainer.get('resume_from_checkpoint', None)
+        if resume_path:
+            self._resume_from_checkpoint(resume_path)
+
         # perform validation before training
         # currently, we only support validation using the reward_function.
         if self.val_reward_fn is not None and self.config.trainer.get('val_before_train', True):

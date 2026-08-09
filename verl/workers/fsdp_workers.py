@@ -516,19 +516,82 @@ class ActorRolloutRefWorker(Worker):
 
         # TODO: support DCP and save sharded checkpoints
         import torch.distributed
-        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, StateDictType, FullStateDictConfig
+        from torch.distributed.fsdp import (FullyShardedDataParallel as FSDP, StateDictType, FullStateDictConfig,
+                                            FullOptimStateDictConfig)
         cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
-        with FSDP.state_dict_type(self.actor.actor_module, StateDictType.FULL_STATE_DICT, cfg):
+        optim_cfg = FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=True)
+        # state_dict() and optim_state_dict() are both collectives: every rank must
+        # enter them, even though only rank 0 receives the gathered tensors.
+        with FSDP.state_dict_type(self.actor.actor_module, StateDictType.FULL_STATE_DICT, cfg, optim_cfg):
             state_dict = self.actor.actor_module.state_dict()
+            optimizer_state_dict = FSDP.optim_state_dict(self.actor.actor_module, self.actor_optimizer)
         if self.rank == 0:
             print(f'Saving actor checkpoint to {local_path}')
             os.makedirs(local_path, exist_ok=True)
             self.actor_module.save_pretrained(local_path, state_dict=state_dict)
             self.tokenizer.save_pretrained(local_path)
+            # Weights alone are not resumable. Without the AdamW moments the first
+            # steps after a restart take mis-scaled updates, and without the scheduler
+            # the warmup (lr_warmup_steps_ratio * total_training_steps) replays from
+            # zero -- which is what made the NODE_FAIL requeue restart from scratch.
+            torch.save(
+                {
+                    'optimizer': optimizer_state_dict,
+                    'lr_scheduler': self.actor_lr_scheduler.state_dict(),
+                }, os.path.join(local_path, 'optim.pt'))
+            print(f'Saved actor optimizer + lr_scheduler to {os.path.join(local_path, "optim.pt")}')
             if hdfs_path is not None:
                 print(f'Uploading actor checkpoint to {hdfs_path}')
                 hdfs_io.makedirs(hdfs_path, exist_ok=True)
                 hdfs_io.copy(src=local_path, dst=hdfs_path)
+
+        torch.distributed.barrier()
+        if self._is_offload_param:
+            offload_fsdp_param_and_grad(module=self.actor_module_fsdp, offload_grad=self._is_offload_grad)
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def load_optimizer_checkpoint(self, local_path):
+        """Restore AdamW moments and the LR schedule saved next to the weights.
+
+        Model weights are NOT loaded here -- they come from
+        actor_rollout_ref.model.path, which main_ppo points at the same checkpoint
+        directory when resuming. That reuses the well-tested HF loading path and
+        keeps this method to the state `save_pretrained` cannot express.
+        """
+        assert self._is_actor
+        import torch
+        import torch.distributed
+        from torch.distributed.fsdp import (FullyShardedDataParallel as FSDP, StateDictType, FullStateDictConfig,
+                                            FullOptimStateDictConfig)
+
+        optim_path = os.path.join(local_path, 'optim.pt')
+        if not os.path.exists(optim_path):
+            # Checkpoints written before optimizer saving existed: weights still load,
+            # so warn and continue as a warm start rather than failing the job.
+            if self.rank == 0:
+                print(f'[resume] WARNING: no optim.pt in {local_path}; optimizer and LR '
+                      f'schedule will start from scratch (weights-only warm start).')
+            return
+
+        if self._is_offload_param:
+            load_fsdp_param_and_grad(module=self.actor_module_fsdp,
+                                     device_id=torch.cuda.current_device(),
+                                     load_grad=self._is_offload_grad)
+
+        payload = torch.load(optim_path, map_location='cpu', weights_only=False)
+
+        cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+        optim_cfg = FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=True)
+        with FSDP.state_dict_type(self.actor.actor_module, StateDictType.FULL_STATE_DICT, cfg, optim_cfg):
+            # Reshards the full optimizer state onto this rank's parameter shard.
+            sharded = FSDP.optim_state_dict_to_load(model=self.actor.actor_module,
+                                                    optim=self.actor_optimizer,
+                                                    optim_state_dict=payload['optimizer'])
+            self.actor_optimizer.load_state_dict(sharded)
+        self.actor_lr_scheduler.load_state_dict(payload['lr_scheduler'])
+        if self.rank == 0:
+            print(f'[resume] restored optimizer + lr_scheduler from {optim_path} '
+                  f'(scheduler last_epoch={self.actor_lr_scheduler.last_epoch})')
 
         torch.distributed.barrier()
         if self._is_offload_param:

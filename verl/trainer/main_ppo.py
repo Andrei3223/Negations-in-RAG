@@ -220,6 +220,60 @@ import ray
 import hydra
 
 
+def _resolve_resume_path(config):
+    """Resolve trainer.resume_from_checkpoint and repoint model.path at it.
+
+    Accepts null/'' (fresh run), 'auto' (newest checkpoint under
+    trainer.default_local_dir), or an explicit global_step_* directory.
+
+    Weights are resumed by loading them the normal way -- model.path is rewritten
+    to the checkpoint directory before the workers are built -- while the
+    optimizer, LR schedule, step counter and reward EMA are restored later by
+    RayPPOTrainer._resume_from_checkpoint.
+    """
+    from omegaconf import open_dict
+
+    resume = config.trainer.get('resume_from_checkpoint', None)
+    if not resume:
+        return
+
+    if str(resume) == 'auto':
+        base = config.trainer.default_local_dir
+        pointer = os.path.join(base, 'latest_checkpoint.txt')
+        resolved = None
+        if os.path.exists(pointer):
+            with open(pointer) as f:
+                candidate = f.read().strip()
+            if candidate and os.path.isdir(candidate):
+                resolved = candidate
+        if resolved is None:
+            # Fall back to the highest-numbered checkpoint directory.
+            actor_dir = os.path.join(base, 'actor')
+            steps = []
+            if os.path.isdir(actor_dir):
+                for name in os.listdir(actor_dir):
+                    if name.startswith('global_step_') and name[len('global_step_'):].isdigit():
+                        steps.append(int(name[len('global_step_'):]))
+            if steps:
+                resolved = os.path.join(actor_dir, f'global_step_{max(steps)}')
+        if resolved is None:
+            print(f"[resume] resume_from_checkpoint='auto' but no checkpoint found under "
+                  f"{base}; starting a fresh run.")
+            with open_dict(config):
+                config.trainer.resume_from_checkpoint = None
+            return
+        resume = resolved
+
+    if not os.path.isdir(resume):
+        raise FileNotFoundError(f'trainer.resume_from_checkpoint={resume!r} is not a directory')
+
+    with open_dict(config):
+        config.trainer.resume_from_checkpoint = resume
+        config.actor_rollout_ref.model.path = resume
+    print(f'[resume] loading weights from {resume} (model.path repointed); optimizer, LR '
+          f'schedule and step counter restored from the same directory')
+
+
 @hydra.main(config_path='config', config_name='ppo_trainer', version_base=None)
 def main(config):
     if not ray.is_initialized():
@@ -258,6 +312,7 @@ def main_task(config):
     OmegaConf.resolve(config)
 
     _validate_data_sources(config)
+    _resolve_resume_path(config)
 
     # env_class = ENV_CLASS_MAPPING[config.env.name]
 
