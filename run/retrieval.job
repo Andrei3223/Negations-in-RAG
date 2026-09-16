@@ -1,0 +1,52 @@
+#!/bin/bash
+#SBATCH --job-name=subsearch-retriever
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:nvidia_rtx_a6000:2
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=100G
+#SBATCH --time=15-00:00:00
+#SBATCH --output=/home/16207041/Negations-in-RAG/logs/%x-%j.out
+#SBATCH --error=/home/16207041/Negations-in-RAG/logs/%x-%j.err
+#
+# e5 + FAISS retrieval server over wiki-18. Long-lived: submit this FIRST and
+# leave it running for the whole training run -- run/train.job connects to it
+# over the network and will not start until it answers.
+#
+# --time must stay LONGER than run/train.job's: if the retriever dies mid-run the
+# trainer has no reconnect path and the run is lost with no resumable checkpoint.
+# Currently 15 days against the trainer's 14.
+#
+# --mem=100G, down from 200G, so this can SHARE cn120 with the trainer. Since
+# run/train.job needs --mem=400G and cn120 (515 GB) is the only node big enough,
+# a 200 GB retriever there leaves 311 GB and the trainer waits forever on
+# Reason=Resources -- that deadlocked jobs 339349/339350 on 2026-08-17. At 100G
+# the two fit (100 + 400 = 500 of 515). Excluding cn120 instead is NOT an option:
+# cn116/117/118 were DOWN (ResumeTimeout) that day and cn119 has L40s, so an
+# exclude would leave this unschedulable.
+#
+# 100G is generous for what this actually uses: the 60 GB fp32 index needs host
+# RAM only transiently inside faiss.read_index, and once index_cpu_to_all_gpus
+# has sharded it to fp16 on the GPUs the server's RSS drops to a couple of GB
+# (measured on cn120 -- the corpus is a memory-mapped Arrow dataset and shows up
+# as page cache, not RSS). Do not drop below ~80G or the index load will fail.
+#
+#   sbatch run/retrieval.job
+#
+# Startup is slow (~15-30 min): 60G of index has to come off shared storage
+# before the server binds its port. Watch logs/subsearch-retriever-<jobid>.out
+# for "Retriever endpoint published".
+#
+# --mem=200G because faiss.read_index materialises the fp32 index in host RAM
+# before index_cpu_to_all_gpus converts and shards it to fp16 (~15G per GPU on
+# the 2 requested A6000s).
+
+set -eo pipefail
+
+cd /home/16207041/Negations-in-RAG
+source run/env.sh
+conda activate "$RETRIEVER_ENV"
+
+echo "node=$(hostname)  job=${SLURM_JOB_ID:-none}  gpus=${CUDA_VISIBLE_DEVICES:-unset}"
+exec bash retrieval_launch.sh

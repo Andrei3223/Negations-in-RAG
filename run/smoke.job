@@ -1,0 +1,77 @@
+#!/bin/bash
+#SBATCH --job-name=subsearch-smoke
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:nvidia_rtx_a6000:4
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=300G
+#SBATCH --exclude=ilps-cn120
+#SBATCH --time=16:00:00
+#SBATCH --output=/home/16207041/Negations-in-RAG/logs/%x-%j.out
+#SBATCH --error=/home/16207041/Negations-in-RAG/logs/%x-%j.err
+#
+# End-to-end pipeline test at ~1/32 scale. Config: subsearch_smoke.yaml.
+#
+#   sbatch run/smoke.job
+#
+# Reuses the retrieval server that run/retrieval.job already has up -- it is just
+# an HTTP endpoint, and two trainers can query it concurrently. No second index
+# load (~30 min) and no extra 2 GPUs. If no retriever is running, start
+# run/retrieval.job first.
+#
+# --exclude=ilps-cn120 is deliberate and load-bearing: the real training run
+# lives there, and Ray's memory monitor triggers on NODE-wide usage. A smoke test
+# sharing that node could push it past the 0.95 threshold and make Ray kill a
+# worker belonging to the real run. Keep them on separate nodes.
+#
+# --mem=300G is set by the checkpoint save, not by the batch size. Everything
+# else here runs comfortably in well under 100 GB, but _save_checkpoint gathers a
+# full fp32 state dict on rank 0 while the CPU-offloaded params, grads and Adam
+# moments are still resident, and that is model-size dependent -- identical at
+# batch 16 and batch 512. Job 339460 measured MaxRSS 215 GB and was OOM-killed
+# against a 200G request. 300G restricts scheduling to cn117 (320G) since cn120
+# is excluded below, which is fine -- cn118's 256G cannot hold the save either.
+
+set -eo pipefail
+
+cd /home/16207041/Negations-in-RAG
+source run/env.sh
+conda activate "$TRAIN_ENV"
+
+# Overridable so the same launcher can drive the overfit diagnostic:
+#   sbatch --export=ALL,CONFIG_NAME=subsearch_overfit run/smoke.job
+export CONFIG_NAME="${CONFIG_NAME:-subsearch_smoke}"
+
+echo "node=$(hostname)  job=${SLURM_JOB_ID:-none}  gpus=${CUDA_VISIBLE_DEVICES:-unset}"
+
+# The retriever should already be up, so probe briefly rather than waiting an
+# hour: failing fast is the point of a smoke test.
+echo "Checking for a retriever at $RETRIEVER_IP_PATH (up to 5 min)..."
+retriever_url=""
+for i in $(seq 1 60); do
+    if [ -f "$RETRIEVER_IP_PATH" ]; then
+        url=$(tr -d '[:space:]' < "$RETRIEVER_IP_PATH")
+        case "$url" in
+            http*) ;;
+            "")    url="" ;;
+            *)     url="http://$url:$RETRIEVER_PORT" ;;
+        esac
+        if [ -n "$url" ] && curl -sf --max-time 10 "$url/retrieve" \
+                -H 'Content-Type: application/json' \
+                -d '{"queries":["test"],"topk":1,"return_scores":true}' >/dev/null 2>&1; then
+            retriever_url="$url"
+            echo "Retriever ready at $retriever_url"
+            break
+        fi
+    fi
+    sleep 5
+done
+
+if [ -z "$retriever_url" ]; then
+    echo "ERROR: no retriever answered within 5 min. Start run/retrieval.job, or"
+    echo "       check that the one in squeue is still alive."
+    exit 1
+fi
+
+exec bash train_grpo.sh

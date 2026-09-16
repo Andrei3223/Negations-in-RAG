@@ -1,0 +1,113 @@
+# Negation finetune: specialise the published SubSearch policy on negation-only data.
+#
+#   sbatch --gres=gpu:nvidia_l40:4 --mem=400G --time=2-00:00:00 \
+#          --export=ALL,CONFIG_NAME=subsearch_negation_ft run/smoke.job
+#
+# WHY: negation is the one thing that never moved. Across the full 189k-example run,
+#   nq went 0.072 -> 0.396 and hotpotqa 0.058 -> 0.362, while nevir crawled 0.004 -> 0.055
+#   and negations-free 0.009 -> 0.043. The overfit diagnostic
+#   (SubSearch-overfit/3tkkvj0n) then showed 64 examples reach ~85% of what 189k
+#   achieve, so general RL was mostly teaching the output protocol, not retrieval
+#   skill -- more of the same data will not move negation. This trains on negation
+#   alone instead.
+#
+# FIRST RUN TO ACTUALLY USE DECOMPOSITION. Every earlier local run pointed DATA_PATH at
+#   combined_nq_hotpot_nevir_negfree_upsampled, whose prompts are the BASE template and
+#   contain zero '##'. Every "Decomposition step:" line in those logs is a single-element
+#   list, so _score_decomposition only ever took its one-child "rephrase" branch. The
+#   _decomposed datasets fix that.
+#
+# Launch via run/smoke.job, NOT run/train.job: train_grpo.sh passes data.train_files,
+#   data.val_files and model.path on the CLI from $DATA_PATH / $BASE_MODEL, which would
+#   override everything set here. smoke.job passes none of those, so this file wins.
+
+defaults:
+  - subsearch_grpo
+  - _self_
+
+data:
+  train_files: /home/16207041/Negations-in-RAG/data/negation_only_decomposed/train.parquet
+
+  # The COMBINED val, not negation_only_decomposed/val.parquet, for two reasons.
+  #
+  # 1. Forgetting. This carries nq and hotpotqa (500 each) alongside the same 352
+  #    negation rows, and RewardManager reports per-data_source scores, so all four
+  #    curves appear. Specialising on 1.8k negation examples could wreck general
+  #    retrieval and the negation-only val would never show it.
+  # 2. The negation-only val would crash the job. Both dataloaders are built with
+  #    drop_last=True and ray_trainer.py then asserts len(val_dataloader) >= 1; at 352
+  #    rows against the inherited val_batch_size of 676, floor(352/676) = 0 and it dies
+  #    at startup before any GPU work. If you ever do switch to the negation-only val,
+  #    val_batch_size MUST drop to 352 or lower.
+  #
+  # Must be the _decomposed build: the non-decomposed one is the BASE template, and a
+  # val whose prompt differs from training would make the numbers meaningless.
+  val_files: /home/16207041/Negations-in-RAG/data/combined_nq_hotpot_nevir_negfree_upsampled_decomposed/val.parquet
+
+  # 512 would give floor(1782/512) = 3 batches per epoch. 128 gives 13, which is what
+  # makes 150 steps reachable without an absurd epoch count (see total_epochs).
+  train_batch_size: 128
+  # 1352/676 = 2 batches. Inherited value, restated because it is load-bearing here.
+  val_batch_size: 676
+
+actor_rollout_ref:
+  model:
+    # The PUBLISHED SubSearch model (README: RoxanaMaria/SubSearch-qwen2.5-3b-grpo),
+    # not a local verl_checkpoints/global_step_*. Two reasons: it is presumably the one
+    # actually trained with the decomposed prompt, and it makes this reproducible from a
+    # public artifact rather than from a local run that was killed mid-flight.
+    #
+    # Weights only. Deliberately NOT trainer.resume_from_checkpoint: that path expects
+    # optim.pt and trainer_state.pt beside the weights and would restore AdamW moments,
+    # the LR scheduler position, a non-zero global_steps and the reward adaptive-beta
+    # EMA. This directory has none of those, and a finetune on new data wants a fresh
+    # optimizer, a fresh schedule and a step counter at 0 anyway.
+    path: /home/16207041/Negations-in-RAG/checkpoints/SubSearch-qwen2.5-3b-grpo
+  actor:
+    optim:
+      # Half the 1e-6 used to train from base. The starting policy is already RL-trained;
+      # this is specialisation onto 1.8k examples, not learning the task from scratch.
+      lr: 5e-7
+      # 0.285 of 150 steps would be 43 steps of warmup on an already-trained policy.
+      # 0.05 gives ~7. docs/experiment_log.md notes Search-R1 v0.2 improved specifically
+      # by lowering this.
+      lr_warmup_steps_ratio: 0.05
+
+    # fsdp_workers.py divides both by world size (4) and dp_actor.py asserts
+    # ppo_mini % ppo_micro == 0. At train_batch_size 128 x n_agent 5 = 640 rollouts,
+    # 160 per GPU:
+    #   mini 128 (32/GPU), micro 16 (4/GPU) -> 160/32 = 5.00 mini-batches, 32 % 4 = 0  OK
+    #   mini 256 (64/GPU), micro 16 (4/GPU) -> 160/64 = 2.50 mini-batches, ragged      avoid
+    ppo_mini_batch_size: 128
+    # Unchanged from subsearch_grpo. Peak is ~3x tokens*vocab*2B through
+    # entropy_from_logits, and 4 sequences per GPU is the sizing that has held.
+    ppo_micro_batch_size: 16
+
+trainer:
+  # Separate project: this is a different starting model, a different dataset and a
+  # different prompt template, so the curves must not sit next to the main runs.
+  project_name: SubSearch-negation-ft
+  experiment_name: negation-ft-from-subsearch-lr5e-7
+
+  total_training_steps: 150
+
+  # CRITICAL, and the same trap documented in subsearch_overfit.yaml. fit() is
+  # `for epoch in range(total_epochs): for batch in train_dataloader`, so reachable
+  # steps are len(dataloader) * total_epochs regardless of total_training_steps. At 13
+  # batches/epoch the inherited total_epochs of 15 caps the run at 195 steps and it
+  # would exit silently without the final validation. 100 allows 1300, so the 150-step
+  # limit binds instead.
+  total_epochs: 100
+
+  # 6 checkpoints and 6 val points over the run. Unlike the overfit diagnostic, the
+  # weights ARE the deliverable here, so saving is on -- which is what forces --mem=400G:
+  # _save_checkpoint's FSDP state-dict gather peaks at ~253 GiB and scales with model
+  # size, not batch size, so the small batch here buys nothing.
+  save_freq: 25
+  test_freq: 25
+
+  # Step-0 baseline: the published SubSearch model scored on the decomposed val, per
+  # data source. There is no prior number to compare against -- the local runs' 0.384 nq
+  # / 0.360 hotpotqa were measured on the BASE-template val -- so this row is the
+  # reference point for everything after it.
+  val_before_train: true

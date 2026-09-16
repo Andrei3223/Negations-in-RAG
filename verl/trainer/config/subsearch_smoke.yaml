@@ -1,0 +1,75 @@
+# Smoke test: the full training pipeline at ~1/32 scale, in minutes not days.
+#
+#   sbatch run/smoke.job
+#
+# Inherits everything from subsearch_grpo and shrinks only the sizes, so what it
+# exercises is the real code path -- same model, same reward, same FSDP world,
+# same checkpoint save -- on a batch small enough to finish a step in minutes.
+# Run it after any change to the config, the reward, or the agent loop, before
+# committing 4 GPUs for two weeks.
+#
+# WHAT IT CATCHES:  config composition, dataloader + data_source preflight,
+#   retriever connectivity, the multi-turn rollout loop, reward scoring across
+#   all four data sources, advantage, the actor update, CHECKPOINT SAVING (the
+#   step-25 host-OOM that killed 339329 -- save_freq is 1 here so it happens on
+#   step 1), validation, and W&B logging.
+#
+# WHAT IT DOES NOT CATCH:  GPU memory headroom at production batch sizes. The
+#   sizes below are far smaller, so an OOM in update_actor at the real
+#   ppo_micro_batch_size will not reproduce here. Checkpoint RAM *does* scale
+#   with model size rather than batch, so that part is faithful.
+
+defaults:
+  - subsearch_grpo
+  - _self_
+
+data:
+  # Subsample the parquet rather than pointing at a different file, so the
+  # data_source mix (nq / hotpotqa / nevir / negations-free) stays representative
+  # and main_ppo.py's preflight check still means something.
+  #
+  # Both dataloaders use drop_last=True, so data_num must be >= batch_size or
+  # len(dataloader) is 0 and ray_trainer asserts.
+  #
+  # Train: 4096/16 = 256 batches available, comfortably more than the 48 steps
+  #   below, so the run is step-limited rather than data-limited.
+  train_data_num: 4096
+  # Val: a literal 8x would be 2048, but val.parquet holds only 1352 rows -- the
+  #   dataloader would clamp to 1352 and print a WARNING. Set to the whole split
+  #   directly: same data, no spurious warning.
+  val_data_num: 1352
+  train_batch_size: 16
+  # 676, not 32, and this is load-bearing rather than cosmetic. Validation is
+  # generation-only, so batching affects throughput and nothing else -- the
+  # metrics are identical either way. At 32 it takes 42 sequential batches that
+  # leave vLLM mostly idle (~100 min); at 676 it takes 2 (~5 min). Across the 18
+  # validation passes this config triggers, that is the difference between a
+  # 33-hour run and a 4.6-hour one.
+  val_batch_size: 676
+
+actor_rollout_ref:
+  actor:
+    # fsdp_workers.py divides both by world size (4), so keep them multiples of 4
+    # or the integer division silently truncates. 16*5 rollouts / 4 GPUs = 20 per
+    # GPU; mini normalises to 4 (5 mini-batches), micro to 1, and the
+    # ppo_mini % ppo_micro assert in dp_actor holds.
+    ppo_mini_batch_size: 16
+    ppo_micro_batch_size: 4
+
+trainer:
+  # Separate project and name: a smoke run must not land in the SubSearch
+  # workspace next to real runs, and must not write into the real run's
+  # checkpoint directory.
+  project_name: SubSearch-smoke
+  experiment_name: smoke-qwen2.5-3b-topk${retriever.topk}
+  # Last step only. ray_trainer has no end-of-training save -- the modulo check
+  # inside the loop is the only save path, and it runs before global_steps is
+  # incremented -- so setting this equal to total_training_steps fires exactly
+  # once, on the final step. Interpolated rather than hardcoded so it stays
+  # "last step only" if total_training_steps changes.
+  # One 36 GB write instead of one per step.
+  save_freq: 50
+  test_freq: 4
+  
+  total_training_steps: 100
+  val_before_train: true

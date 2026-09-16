@@ -1,0 +1,60 @@
+# Deliberate-overfit diagnostic: can the policy drive the training reward toward
+# 1.0 on a handful of examples it sees over and over?
+#
+#   sbatch --export=ALL,CONFIG_NAME=subsearch_overfit run/smoke.job
+#
+# This is a capacity/plumbing check, not a result. If critic/score/mean climbs
+# steadily on 64 fixed examples, the rollout loop, the reward, the advantage and
+# the actor update are all wired correctly and the objective is learnable. If it
+# stays flat, something upstream is broken and no amount of full-scale training
+# will fix it. The held-out val curve going flat or down while train climbs is
+# the expected signature -- that gap IS the result here.
+#
+# The metric curve is the deliverable, not the weights, and wandb now commits
+# every step, so an interrupted run still leaves a usable trace.
+
+defaults:
+  - subsearch_smoke
+  - _self_
+
+data:
+  # 64 examples / train_batch_size 16 = 4 batches per epoch, so across the 150
+  # steps below each example is drawn ~37 times (x n_agent 5 = ~185 rollouts
+  # each). Small enough to memorise, large enough that batch composition still
+  # varies under shuffle.
+  train_data_num: 64
+  # One val batch at the inherited val_batch_size of 676. Held out, so it shows
+  # the generalisation gap opening rather than tracking the train curve.
+  val_data_num: 676
+
+trainer:
+  # Separate project: these curves are diagnostics and would be misleading next
+  # to real runs.
+  project_name: SubSearch-overfit
+  experiment_name: overfit-64ex-qwen2.5-3b-topk2
+
+  total_training_steps: 150
+
+  # CRITICAL, and the reason this cannot just be an override on subsearch_smoke.
+  # fit() is `for epoch in range(total_epochs): for batch in train_dataloader`,
+  # so the reachable step count is total_epochs * batches_per_epoch. With only 4
+  # batches per epoch, the inherited total_epochs of 15 would cap the run at 60
+  # steps and it would exit silently, without hitting total_training_steps and
+  # without the final validation. 200 epochs allows 800 steps, so the step limit
+  # binds instead.
+  total_epochs: 200
+
+  # 6 val points over the run. Frequent enough to see the gap open, cheap enough
+  # not to dominate: at val_batch_size 676 each pass is ~5 min.
+  test_freq: 25
+
+  # No checkpoints at all. ray_trainer guards the save with `if save_freq > 0`,
+  # so 0 disables it outright -- and the weights from a deliberate-overfit run on
+  # 64 examples are worthless; the reward curve is the entire deliverable, and
+  # wandb now commits it per step.
+  #
+  # This is also what makes the run schedulable. _save_checkpoint's FSDP gather
+  # is what drives peak host RAM to ~253 GiB (measured on job 339350) regardless
+  # of batch size; without it this run needs a fraction of that, so it fits on a
+  # busy node instead of queueing for days behind a 300G request.
+  save_freq: 0

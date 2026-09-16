@@ -1,0 +1,84 @@
+#!/bin/bash
+#SBATCH --job-name=subsearch-grpo
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:nvidia_l40:4
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=400G
+#SBATCH --time=14-00:00:00
+#SBATCH --output=/home/16207041/Negations-in-RAG/logs/%x-%j.out
+#SBATCH --error=/home/16207041/Negations-in-RAG/logs/%x-%j.err
+#
+# GRPO training. Needs run/retrieval.job already running -- submit that first,
+# then:
+#
+#   sbatch run/train.job
+#
+# --mem=400G is set by _save_checkpoint, not by the batch size. The FSDP full
+# state-dict gather is model-size dependent (identical on L40 and A6000, and at
+# any batch size): job 339350 measured MaxRSS 265,094,440 KiB = 252.8 GiB and
+# survived only because it asked for 400G. 250G is 2.8 GiB under that peak, and
+# the cgroup is enforced here -- job 339460 was OOM-killed at 215 GB against a
+# 200G request. cn119 has 773 GB, so 400G costs nothing in schedulability.
+#
+# Hyperparameters live in verl/trainer/config/subsearch_grpo.yaml. To override
+# one for a single run without editing the config:
+#
+#   sbatch --export=ALL,EXTRA_OVERRIDES="reward_model.schedule.beta=0.3" run/train.job
+#
+# 4 GPUs because subsearch_grpo.yaml sets trainer.n_gpus_per_node=4; change both
+# together or FSDP will not see the devices it expects.
+#
+# --mem=400G is about HOST RAM, not GPU. Job 339329 died at the step-25
+# checkpoint save: Ray's memory monitor killed it with the node at 301/315 GB.
+# save_checkpoint (fsdp_workers.py:509) gathers a full fp32 state dict on rank 0
+# while all four ranks still hold CPU-offloaded params, grads and Adam moments --
+# 175 GB across the workers, MaxRSS 230 GB for the job. 400G is not a number the
+# job needs to touch; it is a scheduling filter. Combined with the a6000 gres it
+# admits only ilps-cn120 (515 GB), where a 301 GB peak sits at 58% of the node
+# and nothing near Ray's 0.95 trigger. cn116/117/118 have 257/320/256 GB and are
+# all too tight for the save; cn119 has the RAM but L40s rather than A6000s.
+
+set -eo pipefail
+
+cd /home/16207041/Negations-in-RAG
+source run/env.sh
+conda activate "$TRAIN_ENV"
+
+echo "node=$(hostname)  job=${SLURM_JOB_ID:-none}  gpus=${CUDA_VISIBLE_DEVICES:-unset}"
+
+# --- Wait for the retriever ----------------------------------------------------
+# Index load takes ~15-30 min, so allow an hour. Probing /retrieve rather than
+# just checking the file catches a retriever that published its endpoint and
+# then died during index load.
+echo "Waiting for retriever advertised in $RETRIEVER_IP_PATH (up to 60 min)..."
+retriever_url=""
+for i in $(seq 1 720); do
+    if [ -f "$RETRIEVER_IP_PATH" ]; then
+        url=$(tr -d '[:space:]' < "$RETRIEVER_IP_PATH")
+        case "$url" in
+            http*) ;;                                  # full endpoint
+            "")    url="" ;;
+            *)     url="http://$url:$RETRIEVER_PORT" ;; # bare IP (older format)
+        esac
+        if [ -n "$url" ] && curl -sf --max-time 10 "$url/retrieve" \
+                -H 'Content-Type: application/json' \
+                -d '{"queries":["test"],"topk":1,"return_scores":true}' >/dev/null 2>&1; then
+            retriever_url="$url"
+            echo "Retriever ready at $retriever_url (waited ~$((i * 5))s)"
+            break
+        fi
+    fi
+    sleep 5
+done
+
+if [ -z "$retriever_url" ]; then
+    echo "ERROR: no retriever answered within 60 min."
+    echo "  Is run/retrieval.job running?   squeue -u $USER"
+    echo "  Endpoint file: $RETRIEVER_IP_PATH"
+    exit 1
+fi
+
+# --- Train ---------------------------------------------------------------------
+exec bash train_grpo.sh
