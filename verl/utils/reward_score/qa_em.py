@@ -84,6 +84,35 @@ def subem_check(prediction, golden_answers):
             break
     return score
 
+def _strip_prompt(solution_str):
+    """Drop everything up to the assistant turn, leaving only model output.
+
+    RewardManager decodes prompt and response together (main_ppo.py: sequences_str
+    = decode(cat(prompt_ids, response_ids))), and every Search-R1/SubSearch prompt
+    template states its instructions using literal tags:
+
+        <search> query </search>
+        <search> sub-question 1 ## sub-question 2 </search>
+        <information> documents sub-question 1 ## documents sub-question 2 </information>
+        <answer> Beijing </answer>
+
+    so any regex over the whole string reads the instruction's examples as things
+    the model did. extract_solution (qa_em_format.py) and is_valid_sequence already
+    guard this way -- "Only look at model output, not the prompt" -- but the tag
+    extractors below did not, in upstream SubSearch as well as here.
+
+    Consequence before this fix: every trajectory picked up two phantom <search>
+    steps and two phantom <information> blocks. Under the base template the search
+    phantom was ['query'], a single element scoring 0.0 -- inert but biasing.
+    Under the decomposed template it became ['sub-question 1', 'sub-question 2'],
+    a scoreable pair: job 342904 logged 1377 of 1403 "decompositions" as exactly
+    that string, while the model emitted '##' once in 12568 real searches.
+    """
+    if "<|im_start|>assistant" in solution_str:
+        return solution_str.split("<|im_start|>assistant", 1)[1]
+    return solution_str
+
+
 def extract_all_search_queries(solution_str):
     """
     Extract all <search>...</search> contents.
@@ -93,6 +122,7 @@ def extract_all_search_queries(solution_str):
     """
     # Example: [["Japan finances", "Spain finances"], ["Differences between Japan and Spain debt"]]
 
+    solution_str = _strip_prompt(solution_str)
     search_pattern = r'<search>(.*?)</search>'
     matches = re.finditer(search_pattern, solution_str, re.DOTALL)
 
@@ -146,6 +176,7 @@ def extract_all_information_blocks(solution_str):
     # ]
     # ]
 
+    solution_str = _strip_prompt(solution_str)
     info_pattern = r'<information>(.*?)</information>'
     matches = re.finditer(info_pattern, solution_str, re.DOTALL)
 

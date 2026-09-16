@@ -149,6 +149,14 @@ def extract_solution(solution_str):
     return matches[-1].group(1).strip()
 
 def extract_information_blocks(text: str) -> list[str]:
+    # Same prompt guard as extract_solution above: the instruction template states
+    # itself with literal tags, including "<information> documents sub-question 1
+    # ## documents sub-question 2 </information>", so an unguarded regex counts the
+    # instruction's example as a retrieved document. is_retrieval_correct is the
+    # caller, and a placeholder never contains the gold answer, so this was less
+    # damaging than the qa_em.py extractors -- but it is the same defect.
+    if "<|im_start|>assistant" in text:
+        text = text.split("<|im_start|>assistant", 1)[1]
     pattern = r"<information>(.*?)</information>"
     matches = re.findall(pattern, text, re.DOTALL)
     return [match.strip() for match in matches]
