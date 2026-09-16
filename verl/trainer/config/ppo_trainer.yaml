@@ -258,3 +258,32 @@ trainer:
 
 max_turns: 10
 do_search: true
+# Paired validation metrics for negation minimal-pair datasets, computed in
+# verl/trainer/ppo/negation_metrics.py (ported from the `main` branch).
+negation:
+  # Sources whose rows carry extra_info.pair_id + query_role (q1/q2). For these,
+  # _validate also logs val/per_instance_acc (both queries of a pair correct),
+  # val/n_pairs, and val/{positive,negated}_{score,f1}.
+  pair_sources:
+    - nevir
+    - nevir-with-answers
+    - exclusir
+    - negations-free-with-answer
+    - negations-free-sentence-with-answer
+    - negation-controlled-with-answers
+    - gpt4o-negation-controlled
+    - gpt4o-negation-free
+  # Sources where q1 is the NEGATED query; in every other pair source it is q2.
+  # Per source rather than main's single global swap_q_roles, because both
+  # conventions share one val set. Verified on the combined decomposed val:
+  #   negations-free-sentence-with-answer  q1 negated (24 pairs vs 1)
+  #   nevir-with-answers                   q2 negated (44 pairs vs 17)
+  # The remaining negations-free / negation-controlled / gpt4o entries follow
+  # main's documented convention (swap_q_roles=true for those) and were not
+  # re-checked against data; exclusir keeps main's default (q2).
+  q1_negated_sources:
+    - negations-free-with-answer
+    - negations-free-sentence-with-answer
+    - negation-controlled-with-answers
+    - gpt4o-negation-controlled
+    - gpt4o-negation-free

@@ -41,6 +41,7 @@ from verl.utils.seqlen_balancing import get_seqlen_balanced_partitions, log_seql
 
 import re
 from subsearch.llm_agent.generation import LLMGenerationManager, GenerationConfig
+from verl.trainer.ppo.negation_metrics import compute_val_metrics
 
 WorkerType = Type[Worker]
 
@@ -324,7 +325,8 @@ class RayPPOTrainer(object):
                  resource_pool_manager: ResourcePoolManager,
                  ray_worker_group_cls: RayWorkerGroup = RayWorkerGroup,
                  reward_fn=None,
-                 val_reward_fn=None):
+                 val_reward_fn=None,
+                 val_f1_fn=None):
 
         # assert torch.cuda.is_available(), 'cuda must be available on driver'
 
@@ -332,6 +334,8 @@ class RayPPOTrainer(object):
         self.config = config
         self.reward_fn = reward_fn
         self.val_reward_fn = val_reward_fn
+        # Optional second validation scorer (token F1) run on the same rollouts.
+        self.val_f1_fn = val_f1_fn
 
         self.hybrid_engine = config.actor_rollout_ref.hybrid_engine
         assert self.hybrid_engine, 'Currently, only support hybrid engine'
@@ -441,6 +445,8 @@ class RayPPOTrainer(object):
         import torch
         reward_tensor_lst = []
         data_source_lst = []
+        f1_tensor_lst = []
+        extra_info_lst = []
 
         gen_config = GenerationConfig(
             max_turns=self.config.max_turns,
@@ -494,6 +500,10 @@ class RayPPOTrainer(object):
 
                 reward_tensor_lst.append(reward_tensor)
                 data_source_lst.append(test_batch.non_tensor_batch.get('data_source', ['unknown'] * reward_tensor.shape[0]))
+                # extra_info carries pair_id / query_role for the paired negation metrics.
+                extra_info_lst.append(test_batch.non_tensor_batch.get('extra_info', [{}] * reward_tensor.shape[0]))
+                if self.val_f1_fn is not None:
+                    f1_tensor_lst.append(self.val_f1_fn(test_batch))
         else:
             for batch_dict in self.val_dataloader:
                 timing_raw = {}
@@ -528,23 +538,28 @@ class RayPPOTrainer(object):
 
                     reward_tensor_lst.append(reward_tensor)
                     data_source_lst.append(test_batch.non_tensor_batch.get('data_source', ['unknown'] * reward_tensor.shape[0]))
+                    # extra_info carries pair_id / query_role for the paired negation metrics.
+                    extra_info_lst.append(test_batch.non_tensor_batch.get('extra_info', [{}] * reward_tensor.shape[0]))
+                    if self.val_f1_fn is not None:
+                        f1_tensor_lst.append(self.val_f1_fn(test_batch))
 
         reward_tensor = torch.cat([rw.sum(-1) for rw in reward_tensor_lst], dim=0).cpu()  # (batch_size,)
-        # reward_tensor = torch.cat(reward_tensor_lst, dim=0).sum(-1).cpu()  # (batch_size,)
         data_sources = np.concatenate(data_source_lst, axis=0)
-        # evaluate test_score based on data source
-        data_source_reward = {}
-        for i in range(reward_tensor.shape[0]):
-            data_source = data_sources[i]
-            if data_source not in data_source_reward:
-                data_source_reward[data_source] = []
-            data_source_reward[data_source].append(reward_tensor[i].item())
+        extra_infos = [item for batch_extra in extra_info_lst for item in batch_extra]
+        f1_scores = None
+        if f1_tensor_lst:
+            f1_scores = torch.cat([t.sum(-1) for t in f1_tensor_lst], dim=0).cpu().tolist()
 
-        metric_dict = {}
-        for data_source, rewards in data_source_reward.items():
-            metric_dict[f'val/test_score/{data_source}'] = np.mean(rewards)
-
-        return metric_dict
+        neg_cfg = self.config.get('negation', {}) or {}
+        return compute_val_metrics(
+            scores=reward_tensor.tolist(),
+            data_sources=list(data_sources),
+            extra_infos=extra_infos,
+            pair_sources=neg_cfg.get('pair_sources', []),
+            q1_negated_sources=neg_cfg.get('q1_negated_sources', []),
+            correct_threshold=float(self.config.reward_model.get('score', 1.0)),
+            f1_scores=f1_scores,
+        )
 
 
     def init_workers(self):

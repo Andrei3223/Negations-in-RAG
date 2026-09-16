@@ -132,12 +132,16 @@ class RewardManager():
     """The reward manager.
     """
 
-    def __init__(self, tokenizer, num_examine, reward_cfg, format_score=0., use_answerability=True) -> None:
+    def __init__(self, tokenizer, num_examine, reward_cfg, format_score=0., use_answerability=True,
+                 score_fn=None) -> None:
         self.tokenizer = tokenizer
         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
         self.format_score = format_score
         self.use_answerability = use_answerability
         self.reward_cfg = reward_cfg
+        # Fixed scorer for every data source, bypassing _select_rm_score_fn. Used for
+        # validation-only metrics such as token F1; ignores use_answerability.
+        self.score_fn = score_fn
 
     def __call__(self, data: DataProto):
         """We will expand this function gradually based on the available datasets"""
@@ -175,9 +179,12 @@ class RewardManager():
 
             # select rm_score
             data_source = data_item.non_tensor_batch['data_source']
-            compute_score_fn = _select_rm_score_fn(data_source,
-                                                   self.reward_cfg,
-                                                   use_answerability=self.use_answerability)
+            if self.score_fn is not None:
+                compute_score_fn = self.score_fn
+            else:
+                compute_score_fn = _select_rm_score_fn(data_source,
+                                                       self.reward_cfg,
+                                                       use_answerability=self.use_answerability)
 
             # Set sample ID for logging
             rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
@@ -387,6 +394,14 @@ def main_task(config):
                                   format_score=reward_cfg.format_score,
                                   use_answerability=reward_cfg.val_use_answerability)
 
+    # Token F1 on the same validation rollouts -- a second scoring pass over sequences
+    # already generated, so it costs a re-decode, not another rollout.
+    val_f1_fn = RewardManager(tokenizer=tokenizer,
+                              num_examine=0,
+                              reward_cfg=reward_cfg,
+                              use_answerability=False,
+                              score_fn=qa_em.compute_score_f1)
+
     resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)
     trainer = RayPPOTrainer(config=config,
                             tokenizer=tokenizer,
@@ -395,6 +410,7 @@ def main_task(config):
                             ray_worker_group_cls=ray_worker_group_cls,
                             reward_fn=reward_fn,
                             val_reward_fn=val_reward_fn,
+                            val_f1_fn=val_f1_fn,
                             )
     trainer.init_workers()
     try:

@@ -15,6 +15,7 @@
 import re
 import string
 import random
+from collections import Counter
 import threading
 import math
 import warnings
@@ -83,6 +84,45 @@ def subem_check(prediction, golden_answers):
             score = 1
             break
     return score
+
+
+def token_f1_score(prediction, golden_answers):
+    """Token-level F1 between prediction and the best-matching golden answer.
+
+    Ported from the `main` branch. Partial credit where EM gives none, e.g. the
+    negations-free pair "calotype process" vs a prediction "the calotype".
+    """
+    if isinstance(golden_answers, str):
+        golden_answers = [golden_answers]
+    prediction_tokens = normalize_answer(prediction).split()
+    if not prediction_tokens:
+        return 0.0
+    pred_counter = Counter(prediction_tokens)
+    best_f1 = 0.0
+    for golden_answer in golden_answers:
+        gold_tokens = normalize_answer(golden_answer).split()
+        if not gold_tokens:
+            continue
+        common = sum((pred_counter & Counter(gold_tokens)).values())
+        if common == 0:
+            continue
+        precision = common / len(prediction_tokens)
+        recall = common / len(gold_tokens)
+        best_f1 = max(best_f1, 2 * precision * recall / (precision + recall))
+    return best_f1
+
+
+def compute_score_f1(solution_str, ground_truth, format_score=0., **_):
+    """Token-level F1 of the extracted answer, in [0, 1]. Validation metric only.
+
+    Accepts and ignores the extra kwargs RewardManager passes to EM scorers so it
+    can be dropped in as a score_fn.
+    """
+    answer = extract_solution(solution_str=solution_str)
+    if answer is None:
+        return 0.0
+    return token_f1_score(answer, ground_truth['target'])
+
 
 def _strip_prompt(solution_str):
     """Drop everything up to the assistant turn, leaving only model output.
