@@ -43,7 +43,7 @@ class Tracking(object):
             if WANDB_API_KEY:
                 wandb.login(key=WANDB_API_KEY)
             wandb.init(project=project_name, name=experiment_name, config=config)
-            self.logger['wandb'] = wandb
+            self.logger['wandb'] = _WandbLoggingAdapter(wandb)
 
         if 'mlflow' in default_backend:
             import mlflow
@@ -60,6 +60,44 @@ class Tracking(object):
         for default_backend, logger_instance in self.logger.items():
             if backend is None or default_backend in backend:
                 logger_instance.log(data=data, step=step)
+
+    def finish(self):
+        """Close out the backends so the last rows are not stranded.
+
+        Nothing used to call this. ray_trainer.fit() runs inside a Ray remote
+        task, and Ray tears the worker process down without running Python's
+        atexit hooks, so wandb never got its shutdown -- runs stayed marked
+        `running` until the server timed them out and relabelled them `crashed`.
+        """
+        for backend, logger_instance in self.logger.items():
+            finish = getattr(logger_instance, 'finish', None)
+            if finish is not None:
+                try:
+                    finish()
+                except Exception as exc:  # never let logging teardown kill a run
+                    print(f'[tracking] {backend}.finish() failed: {exc}')
+
+
+class _WandbLoggingAdapter:
+    """Wraps the wandb module so every row is committed as it is logged.
+
+    wandb.log(data, step=N) implies commit=False: the row stays open until a log
+    at a later step arrives. That has two consequences here -- metrics always
+    trailed the console by one step, and the final step(s) of a run were never
+    committed at all, because nothing follows them and finish() was never
+    called. Passing commit=True writes each row immediately, so what you see in
+    wandb matches what the trainer has actually finished.
+    """
+
+    def __init__(self, wandb_module):
+        self._wandb = wandb_module
+
+    def log(self, data, step):
+        self._wandb.log(data=data, step=step, commit=True)
+
+    def finish(self):
+        if self._wandb.run is not None:
+            self._wandb.finish()
 
 
 class _MlflowLoggingAdapter:

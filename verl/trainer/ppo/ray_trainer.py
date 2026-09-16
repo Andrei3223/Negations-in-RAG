@@ -896,7 +896,11 @@ class RayPPOTrainer(object):
 
                 self.global_steps += 1
 
-                if self.global_steps >= self.total_training_steps:
+                # `>`, not `>=`: this runs after the increment, so `>=` exited one
+                # step early and `total_training_steps: N` only ever ran N-1 steps.
+                # That also meant save_freq == total_training_steps never fired,
+                # because global_steps never reached N inside the loop.
+                if self.global_steps > self.total_training_steps:
 
                     # perform validation after training
                     if self.val_reward_fn is not None:

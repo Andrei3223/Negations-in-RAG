@@ -397,7 +397,15 @@ def main_task(config):
                             val_reward_fn=val_reward_fn,
                             )
     trainer.init_workers()
-    trainer.fit()
+    try:
+        trainer.fit()
+    finally:
+        # Ray kills this worker without running atexit hooks, so wandb has to be
+        # closed explicitly or the last logged rows are never committed. In
+        # `finally` so a crashed run still flushes the metrics it did produce.
+        logger = getattr(trainer, 'logger', None)
+        if logger is not None and hasattr(logger, 'finish'):
+            logger.finish()
 
 
 if __name__ == '__main__':
