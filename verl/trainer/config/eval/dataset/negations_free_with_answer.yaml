@@ -1,0 +1,9 @@
+# @package _global_
+dataset_id: negations-free-with-answer
+data:
+  train_files: data/negations_with_answer_rag/negations-free-with-answer/test_clean.parquet
+  val_files: data/negations_with_answer_rag/negations-free-with-answer/test_clean.parquet
+  train_data_num: null
+  val_data_num: null
+negation:
+  swap_q_roles: true

@@ -1,0 +1,16 @@
+# @package _global_
+# Oracle context, no retrieval: every <search> returns the row's gold document from
+# the parquet (q1 -> doc1, q2 -> doc2), shown golden_copies times. run/eval.py starts
+# and contacts no server. Needs a *_docs.parquet built by
+# scripts/data_process/negations_golden_docs.py, e.g. eval/dataset=negations_free_with_answer_docs.
+#
+# Two copies, not one: given a single passage, SearchR1 (trained with topk=3) treats
+# the <information> block as unfinished, writes its own fake "Doc 2"/"Doc 3", emits
+# no <search>/<answer>, and loops until max_turns (33-66% of rows never answered).
+# Two copies also match golden_hn / golden_rn, so the three modes differ only in the
+# second document: [gold, gold] vs [gold, hard] vs [gold, random].
+# retriever.golden_copies=1 reproduces the old single-document behaviour.
+retriever:
+  mode: golden
+  golden_copies: 2
+  topk: 2   # unused in golden mode; set to the number of docs shown

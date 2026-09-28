@@ -1,0 +1,5 @@
+# @package _global_
+model_id: qwen2.5-3b-em-grpo
+actor_rollout_ref:
+  model:
+    path: checkpoints/SearchR1-nq_hotpotqa_train-qwen2.5-3b-em-grpo

@@ -1,0 +1,9 @@
+# @package _global_
+retriever:
+  topk: 3
+
+retriever_server:
+  index_path: /fnwi_fs/ivi/irlab/projects/chatr1/collection/e5_Flat.index
+  corpus_path: /fnwi_fs/ivi/irlab/projects/chatr1/collection/wiki-18.jsonl
+  model_path: intfloat/e5-base-v2
+  name: e5

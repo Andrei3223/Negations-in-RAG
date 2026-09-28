@@ -1,0 +1,12 @@
+# @package _global_
+# Use an already-running retrieval server (run/retrieval.job) instead of starting
+# one. The endpoint is read from url_file, which retrieval.job publishes once its
+# port is bound. Pin a server directly with retriever_server.url=http://host:port.
+# The running server serves wiki-18 (e5), so this is the wiki retriever minus setup.
+retriever:
+  topk: 3
+
+retriever_server:
+  use_running: true
+  url: null
+  url_file: ${oc.env:RETRIEVER_IP_PATH,/home/16207041/Negations-in-RAG/retriever_url.txt}

@@ -1,0 +1,14 @@
+# @package _global_
+# Live e5 retrieval over the custom doc1/doc2 corpus, top-1, with the retrieved
+# document shown twice. custom.yaml's lone passage makes SearchR1 (trained with
+# topk=3) write fake "Doc 2"/"Doc 3" and leave 43-65% of rows unanswered; two copies
+# avoid that, as for eval/retriever=golden. Live analogue of golden (gold x2).
+retriever:
+  topk: 1
+  repeat_docs: 2
+
+retriever_server:
+  index_path: data/custom_index/e5_Flat.index
+  corpus_path: data/custom_index/corpus.jsonl
+  model_path: intfloat/e5-base-v2
+  name: e5

@@ -1,0 +1,12 @@
+# @package _global_
+# negations-free-sentence-with-answer test_clean (122 pairs) with gold_doc /
+# hard_neg_doc / rand_neg_doc / doc_order attached by
+# scripts/data_process/negations_golden_docs.py. Use with
+# eval/retriever=golden | golden_hn | golden_rn; live retrievers ignore the extra
+# columns. Sentence-level negation types only (0, 1, 5, 6).
+dataset_id: negations-free-sentence-with-answer-docs
+data:
+  train_files: data/negations_with_answer_rag/negations-free-sentence-with-answer/test_clean_docs.parquet
+  val_files: data/negations_with_answer_rag/negations-free-sentence-with-answer/test_clean_docs.parquet
+  train_data_num: null
+  val_data_num: null   # keep null: sampling would break pairs

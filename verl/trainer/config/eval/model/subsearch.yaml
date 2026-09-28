@@ -1,0 +1,5 @@
+# @package _global_
+model_id: qwen2.5-3b-grpo-subsearch
+actor_rollout_ref:
+  model:
+    path: checkpoints/SubSearch-qwen2.5-3b-grpo

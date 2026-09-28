@@ -1,0 +1,13 @@
+# @package _global_
+# Live e5 retrieval over the custom doc1/doc2 corpus (scripts/build_custom_corpus.py),
+# top-2 instead of custom.yaml's top-1. The corpus holds BOTH documents of every
+# pair, so the second hit is often the pair's other half -- a live analogue of
+# eval/retriever=golden_hn. Only nevir and negations-free-sentence docs are indexed.
+retriever:
+  topk: 2
+
+retriever_server:
+  index_path: data/custom_index/e5_Flat.index
+  corpus_path: data/custom_index/corpus.jsonl
+  model_path: intfloat/e5-base-v2
+  name: e5

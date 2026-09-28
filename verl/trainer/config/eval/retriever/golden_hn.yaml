@@ -1,0 +1,8 @@
+# @package _global_
+# Oracle context plus a hard negative, no retrieval: every <search> returns the
+# row's gold document AND the other half of its negation pair (q1: doc1 + doc2,
+# q2: doc2 + doc1), in the per-row order fixed by the parquet's doc_order column.
+# Needs a *_docs.parquet, e.g. eval/dataset=negations_free_with_answer_docs.
+retriever:
+  mode: golden_hn
+  topk: 2   # unused in golden mode; set to the number of docs shown

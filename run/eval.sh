@@ -7,8 +7,8 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=128G
 #SBATCH --time=02:00:00
-#SBATCH --output=logs/%x-%j.out
-#SBATCH --error=logs/%x-%j.err
+#SBATCH --output=eval_logs/slurm/%x-%j.out
+#SBATCH --error=eval_logs/slurm/%x-%j.err
 
 set -e
 
@@ -41,7 +41,9 @@ export NCCL_P2P_DISABLE=1               # disable NVLink (not available on most 
 
 RETRIEVAL_PORT=8001
 
-mkdir -p logs
+# One folder per run, as in run/eval_negations_with_answers.sh.
+RUN_DIR="eval_logs/${SLURM_JOB_NAME:-local}-${SLURM_JOB_ID:-$(date +%Y%m%d-%H%M%S)}"
+mkdir -p "$RUN_DIR" eval_logs/slurm
 
 # --- Launch retrieval server in background (retriever conda env) ---
 echo "Starting retrieval server..."
@@ -52,7 +54,7 @@ echo "Starting retrieval server..."
         --retriever_name e5 \
         --retriever_model intfloat/e5-base-v2 \
         --port $RETRIEVAL_PORT \
-    > logs/retrieval-${SLURM_JOB_ID}.log 2>&1 &
+    > $RUN_DIR/retrieval.log 2>&1 &
 RETRIEVAL_PID=$!
 
 # Ensure retrieval server is killed when this script exits (for any reason)
@@ -68,11 +70,11 @@ for i in $(seq 1 240); do
     fi
     # abort early if server process already died
     if ! kill -0 $RETRIEVAL_PID 2>/dev/null; then
-        echo "ERROR: Retrieval server process died. Check logs/retrieval-${SLURM_JOB_ID}.log"
+        echo "ERROR: Retrieval server process died. Check $RUN_DIR/retrieval.log"
         exit 1
     fi
     if [ $i -eq 240 ]; then
-        echo "ERROR: Retrieval server did not start in time. Check logs/retrieval-${SLURM_JOB_ID}.log"
+        echo "ERROR: Retrieval server did not start in time. Check $RUN_DIR/retrieval.log"
         exit 1
     fi
     sleep 5
@@ -133,4 +135,4 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     max_turns=2 \
     retriever.url="http://127.0.0.1:$RETRIEVAL_PORT/retrieve" \
     retriever.topk=3 \
-    2>&1 | tee logs/$EXPERIMENT_NAME-${SLURM_JOB_ID}.log
+    2>&1 | tee "$RUN_DIR/eval.log"

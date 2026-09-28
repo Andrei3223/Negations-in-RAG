@@ -1,0 +1,12 @@
+# @package _global_
+# nevir-with-answers test_clean (662 pairs) with gold_doc / hard_neg_doc /
+# rand_neg_doc / doc_order attached by scripts/data_process/negations_golden_docs.py.
+# Use with eval/retriever=golden | golden_hn | golden_rn; live retrievers ignore
+# the extra columns. nevir has no topic, so its docs are titled "Document" and the
+# random negative is drawn from any other pair.
+dataset_id: nevir-with-answers-docs
+data:
+  train_files: data/negations_with_answer_rag/nevir-with-answers/test_clean_docs.parquet
+  val_files: data/negations_with_answer_rag/nevir-with-answers/test_clean_docs.parquet
+  train_data_num: null
+  val_data_num: null   # keep null: sampling would break pairs

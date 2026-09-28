@@ -1,0 +1,9 @@
+# @package _global_
+# Oracle context plus a RANDOM negative, no retrieval: every <search> returns the
+# row's gold document and an unrelated document drawn from a pair on a different
+# topic, in the same slot order as golden_hn (the parquet's doc_order column), so
+# only the distractor differs between the two runs.
+# Needs a *_docs.parquet, e.g. eval/dataset=negations_free_with_answer_docs.
+retriever:
+  mode: golden_rn
+  topk: 2   # unused in golden mode; set to the number of docs shown
