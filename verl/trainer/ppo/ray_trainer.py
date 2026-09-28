@@ -326,7 +326,8 @@ class RayPPOTrainer(object):
                  ray_worker_group_cls: RayWorkerGroup = RayWorkerGroup,
                  reward_fn=None,
                  val_reward_fn=None,
-                 val_f1_fn=None):
+                 val_f1_fn=None,
+                 val_no_answer_fn=None):
 
         # assert torch.cuda.is_available(), 'cuda must be available on driver'
 
@@ -336,6 +337,8 @@ class RayPPOTrainer(object):
         self.val_reward_fn = val_reward_fn
         # Optional second validation scorer (token F1) run on the same rollouts.
         self.val_f1_fn = val_f1_fn
+        # Optional per-row "no usable answer" flag, also on the same rollouts.
+        self.val_no_answer_fn = val_no_answer_fn
 
         self.hybrid_engine = config.actor_rollout_ref.hybrid_engine
         assert self.hybrid_engine, 'Currently, only support hybrid engine'
@@ -411,10 +414,13 @@ class RayPPOTrainer(object):
                 self.val_dataset.dataframe = self.val_dataset.dataframe.sample(self.config.data.val_data_num, random_state=42)
         print(f"filtered validation dataset size: {len(self.val_dataset.dataframe)}")
 
+        # drop_last=True silently discards a partial final batch -- fine while
+        # validating during training, but it loses whole rows (and halves of
+        # negation pairs) from an eval, so eval.yaml sets val_drop_last: false.
         self.val_dataloader = DataLoader(dataset=self.val_dataset,
                                          batch_size=self.config.data.val_batch_size,
                                          shuffle=False,
-                                         drop_last=True,
+                                         drop_last=self.config.data.get('val_drop_last', True),
                                          collate_fn=collate_fn)
 
         print(f'Size of train dataloader: {len(self.train_dataloader)}')
@@ -437,6 +443,22 @@ class RayPPOTrainer(object):
             self.config.actor_rollout_ref.actor.optim.total_training_steps = total_training_steps
             self.config.critic.optim.total_training_steps = total_training_steps
 
+    @staticmethod
+    def _golden_docs_from(batch: DataProto):
+        """Per-row golden-doc records for golden retriever modes, or None if the
+        parquet has no gold_doc column. Read from the parent batch: the gen batch
+        handed to run_llm_loop carries tensors only. In fit() the parent has already
+        been repeat()-ed, so rows line up with the gen batch."""
+        ntb = batch.non_tensor_batch
+        if 'gold_doc' not in ntb:
+            return None
+        n = len(ntb['gold_doc'])
+        neg = ntb.get('hard_neg_doc', [''] * n)
+        rand = ntb.get('rand_neg_doc', [''] * n)
+        order = ntb.get('doc_order', ['gold,neg'] * n)
+        return [{'gold': ntb['gold_doc'][i], 'neg': neg[i], 'rand': rand[i], 'order': order[i]}
+                for i in range(n)]
+
     def _validate(self):
         """
         The training loop of PPO with global metric computation.
@@ -446,6 +468,7 @@ class RayPPOTrainer(object):
         reward_tensor_lst = []
         data_source_lst = []
         f1_tensor_lst = []
+        no_answer_tensor_lst = []
         extra_info_lst = []
 
         gen_config = GenerationConfig(
@@ -458,6 +481,9 @@ class RayPPOTrainer(object):
             no_think_rl=self.config.algorithm.no_think_rl,
             search_url = self.config.retriever.url,
             topk = self.config.retriever.topk,
+            retriever_mode = self.config.retriever.get('mode', 'live'),
+            golden_copies = self.config.retriever.get('golden_copies', 2),
+            repeat_docs = self.config.retriever.get('repeat_docs', 1),
         )
 
         # Agent config preparation
@@ -481,7 +507,7 @@ class RayPPOTrainer(object):
                     'eos_token_id': self.tokenizer.eos_token_id,
                     'pad_token_id': self.tokenizer.pad_token_id,
                     'recompute_log_prob': False,
-                    'do_sample': False,
+                    'do_sample': self.config.trainer.get('val_do_sample', False),
                     'validate': True,
                 }
 
@@ -504,6 +530,8 @@ class RayPPOTrainer(object):
                 extra_info_lst.append(test_batch.non_tensor_batch.get('extra_info', [{}] * reward_tensor.shape[0]))
                 if self.val_f1_fn is not None:
                     f1_tensor_lst.append(self.val_f1_fn(test_batch))
+                if self.val_no_answer_fn is not None:
+                    no_answer_tensor_lst.append(self.val_no_answer_fn(test_batch))
         else:
             for batch_dict in self.val_dataloader:
                 timing_raw = {}
@@ -515,7 +543,7 @@ class RayPPOTrainer(object):
                     'eos_token_id': self.tokenizer.eos_token_id,
                     'pad_token_id': self.tokenizer.pad_token_id,
                     'recompute_log_prob': False,
-                    'do_sample': False,
+                    'do_sample': self.config.trainer.get('val_do_sample', False),
                     'validate': True,
                 }
                 with _timer('step', timing_raw):
@@ -525,6 +553,7 @@ class RayPPOTrainer(object):
                         final_gen_batch_output = generation_manager.run_llm_loop(
                             gen_batch=test_gen_batch,
                             initial_input_ids=first_input_ids,
+                            golden_docs=self._golden_docs_from(test_batch),
                         )
                     
                     test_batch = test_batch.union(final_gen_batch_output)
@@ -542,6 +571,8 @@ class RayPPOTrainer(object):
                     extra_info_lst.append(test_batch.non_tensor_batch.get('extra_info', [{}] * reward_tensor.shape[0]))
                     if self.val_f1_fn is not None:
                         f1_tensor_lst.append(self.val_f1_fn(test_batch))
+                    if self.val_no_answer_fn is not None:
+                        no_answer_tensor_lst.append(self.val_no_answer_fn(test_batch))
 
         reward_tensor = torch.cat([rw.sum(-1) for rw in reward_tensor_lst], dim=0).cpu()  # (batch_size,)
         data_sources = np.concatenate(data_source_lst, axis=0)
@@ -549,6 +580,9 @@ class RayPPOTrainer(object):
         f1_scores = None
         if f1_tensor_lst:
             f1_scores = torch.cat([t.sum(-1) for t in f1_tensor_lst], dim=0).cpu().tolist()
+        no_answer = None
+        if no_answer_tensor_lst:
+            no_answer = torch.cat([t.sum(-1) for t in no_answer_tensor_lst], dim=0).cpu().tolist()
 
         neg_cfg = self.config.get('negation', {}) or {}
         return compute_val_metrics(
@@ -559,6 +593,7 @@ class RayPPOTrainer(object):
             q1_negated_sources=neg_cfg.get('q1_negated_sources', []),
             correct_threshold=float(self.config.reward_model.get('score', 1.0)),
             f1_scores=f1_scores,
+            no_answer=no_answer,
         )
 
 
@@ -751,6 +786,9 @@ class RayPPOTrainer(object):
             no_think_rl=self.config.algorithm.no_think_rl,
             search_url = self.config.retriever.url,
             topk = self.config.retriever.topk,
+            retriever_mode = self.config.retriever.get('mode', 'live'),
+            golden_copies = self.config.retriever.get('golden_copies', 2),
+            repeat_docs = self.config.retriever.get('repeat_docs', 1),
         )
 
         generation_manager = LLMGenerationManager(
@@ -797,6 +835,7 @@ class RayPPOTrainer(object):
                             final_gen_batch_output = generation_manager.run_llm_loop(
                                 gen_batch=gen_batch,
                                 initial_input_ids=first_input_ids,
+                                golden_docs=self._golden_docs_from(batch),
                             )
 
                         # final_gen_batch_output.batch.apply(lambda x: x.long(), inplace=True)

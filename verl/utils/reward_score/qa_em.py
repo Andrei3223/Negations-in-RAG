@@ -124,6 +124,17 @@ def compute_score_f1(solution_str, ground_truth, format_score=0., **_):
     return token_f1_score(answer, ground_truth['target'])
 
 
+def compute_no_answer(solution_str, ground_truth, format_score=0., **_):
+    """1.0 when the model gave no usable answer, else 0.0. Validation metric only.
+
+    "No usable answer" is no <answer> tag at all (the row ran out of turns) or an
+    empty one; both score 0 under EM, so counting them separates "answered wrong"
+    from "never answered". Uses the same extract_solution as EM and F1.
+    """
+    answer = extract_solution(solution_str=solution_str)
+    return 1.0 if answer is None or not answer.strip() else 0.0
+
+
 def _strip_prompt(solution_str):
     """Drop everything up to the assistant turn, leaving only model output.
 

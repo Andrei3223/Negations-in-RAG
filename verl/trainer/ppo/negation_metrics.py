@@ -40,6 +40,7 @@ def compute_val_metrics(
     q1_negated_sources: Iterable[str],
     correct_threshold: float = 1.0,
     f1_scores: Optional[Sequence[float]] = None,
+    no_answer: Optional[Sequence[float]] = None,
 ) -> Dict[str, float]:
     """Aggregate per-sample validation scores into logged metrics.
 
@@ -55,6 +56,10 @@ def compute_val_metrics(
       val/negated_score/{ds}        mean score on the negated query
     and when `f1_scores` is given:
       val/test_f1/{ds}, val/positive_f1/{ds}, val/negated_f1/{ds}
+    and when `no_answer` (1.0 = no usable <answer>) is given:
+      val/n_no_answer/{ds}          rows with no answer or an empty one (count)
+      val/no_answer_rate/{ds}       the same as a fraction of rows
+      val/positive_no_answer_rate/{ds}, val/negated_no_answer_rate/{ds}
     """
     n = len(scores)
     if len(data_sources) != n or len(extra_infos) != n:
@@ -62,6 +67,8 @@ def compute_val_metrics(
                          f"extra_infos={len(extra_infos)}")
     if f1_scores is not None and len(f1_scores) != n:
         raise ValueError(f"length mismatch: scores={n}, f1_scores={len(f1_scores)}")
+    if no_answer is not None and len(no_answer) != n:
+        raise ValueError(f"length mismatch: scores={n}, no_answer={len(no_answer)}")
 
     pair_sources = set(pair_sources)
     q1_negated_sources = set(q1_negated_sources)
@@ -75,6 +82,8 @@ def compute_val_metrics(
     neg: Dict[str, List[float]] = {}
     pos_f1: Dict[str, List[float]] = {}
     neg_f1: Dict[str, List[float]] = {}
+    pos_na: Dict[str, List[float]] = {}
+    neg_na: Dict[str, List[float]] = {}
     pairs: Dict[tuple, Dict[str, float]] = {}
 
     for i in range(n):
@@ -92,6 +101,8 @@ def compute_val_metrics(
         (neg if is_negated else pos).setdefault(ds, []).append(float(scores[i]))
         if f1_scores is not None:
             (neg_f1 if is_negated else pos_f1).setdefault(ds, []).append(float(f1_scores[i]))
+        if no_answer is not None:
+            (neg_na if is_negated else pos_na).setdefault(ds, []).append(float(no_answer[i]))
 
         if pair_id is not None:
             # A duplicate role within a pair would silently overwrite; keep the first.
@@ -121,5 +132,17 @@ def compute_val_metrics(
             metrics[f'val/positive_f1/{ds}'] = float(np.mean(v))
         for ds, v in neg_f1.items():
             metrics[f'val/negated_f1/{ds}'] = float(np.mean(v))
+
+    if no_answer is not None:
+        na_by_source: Dict[str, List[float]] = {}
+        for x, ds in zip(no_answer, data_sources):
+            na_by_source.setdefault(ds, []).append(float(x))
+        for ds, v in na_by_source.items():
+            metrics[f'val/n_no_answer/{ds}'] = float(np.sum(v))
+            metrics[f'val/no_answer_rate/{ds}'] = float(np.mean(v))
+        for ds, v in pos_na.items():
+            metrics[f'val/positive_no_answer_rate/{ds}'] = float(np.mean(v))
+        for ds, v in neg_na.items():
+            metrics[f'val/negated_no_answer_rate/{ds}'] = float(np.mean(v))
 
     return metrics

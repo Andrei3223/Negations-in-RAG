@@ -21,6 +21,15 @@ class GenerationConfig:
     no_think_rl: bool=False
     search_url: str = None
     topk: int = 3
+    # 'live' queries search_url; 'golden' / 'golden_hn' answer every <search> with
+    # the row's gold doc (+ hard negative) passed to run_llm_loop as golden_docs.
+    retriever_mode: str = 'live'
+    # Copies of the gold doc shown in 'golden' mode. One copy makes SearchR1
+    # (trained with topk=3) treat the block as unfinished and write fake docs.
+    golden_copies: int = 2
+    # Live retrieval: show each retrieved doc this many times (1 = normal). With
+    # topk=1, 2 gives [d, d] -- avoids the single-passage failure golden_copies fixes.
+    repeat_docs: int = 1
 
 class LLMGenerationManager:
     def __init__(
@@ -100,18 +109,24 @@ class LLMGenerationManager:
             next_obs_ids
         ])
         
-        # Create attention mask and position ids
+        # Create attention mask
         new_attention_mask = self.tensor_fn.create_attention_mask(new_input_ids)
-        new_position_ids = self.tensor_fn.create_position_ids(new_attention_mask)
 
         # Cut to appropriate length
         effective_len = new_attention_mask.sum(dim=1).max()
         max_len = min(self.config.max_prompt_length, effective_len)
+        cut_attention_mask = new_attention_mask[:, -max_len:]
 
+        # Position ids come from the mask AFTER the cut. Computing them first and
+        # slicing left a truncated trajectory starting at a non-zero position; packed
+        # flash-attention reads position_id == 0 as a sequence start, so such rows
+        # either merged into their neighbour or, if every row in a micro-batch was
+        # truncated, yielded zero sequences (job 347277). vLLM already treats the
+        # truncated context as starting at 0, so this also makes them agree.
         new_rollings = DataProto.from_dict({
             'input_ids': new_input_ids[:, -max_len:],
-            'position_ids': new_position_ids[:, -max_len:],
-            'attention_mask': new_attention_mask[:, -max_len:]
+            'position_ids': self.tensor_fn.create_position_ids(cut_attention_mask),
+            'attention_mask': cut_attention_mask
         })
         new_rollings.meta_info.update(rollings.meta_info)
         
@@ -166,6 +181,20 @@ class LLMGenerationManager:
         
         return {'responses': responses[:, :max_len], 'responses_with_info_mask': responses_with_info_mask[:, :max_len]}
 
+    @staticmethod
+    def _active_subset(rollings: DataProto, active_mask: torch.Tensor) -> DataProto:
+        """Rows still generating, WITH the caller's meta_info.
+
+        from_dict alone starts from an empty meta_info, which silently dropped
+        _validate's do_sample=False: vllm_rollout falls back to do_sample=True, so
+        every validation score until now came from T=1 sampling, not greedy decoding.
+        Training's gen_batch carries no meta_info, so training is unaffected.
+        """
+        return DataProto.from_dict(
+            {k: v[active_mask] for k, v in rollings.batch.items()},
+            meta_info=dict(rollings.meta_info),
+        )
+
     def _generate_with_gpu_padding(self, active_batch: DataProto) -> DataProto:
         """
             Wrapper for generation that handles multi-GPU padding requirements.
@@ -173,6 +202,16 @@ class LLMGenerationManager:
             if active_batch size is not divisible by num_gpus, pad with first sequence
             then remove padding from output
         """
+        # NOTE: do not set meta_info['recompute_log_prob'] = False here, tempting as it
+        # is. The per-turn log-probs themselves are discarded, but generate_sequences
+        # also writes micro_batch_size / max_token_len / use_dynamic_bsz / temperature
+        # into its output meta_info, which flows through run_llm_loop into the final
+        # batch. fsdp_workers.compute_log_prob (ray_trainer.fit) and update_actor read
+        # those keys from there and never set them themselves -- job 347356 died with
+        # KeyError: 'micro_batch_size' when this pass was skipped. The crash this pass
+        # used to cause (job 347277) is fixed at its root in _update_rolling_state.
+        # _validate's own recompute_log_prob=False (forwarded by _active_subset) is
+        # fine: validation never calls compute_log_prob or update_actor.
         num_gpus = self.config.num_gpus
         if num_gpus <= 1:
             return self.actor_rollout_wg.generate_sequences(active_batch)
@@ -194,7 +233,7 @@ class LLMGenerationManager:
             pad_sequence = v[0:1].repeat(padding_size, *[1] * (len(v.shape) - 1))
             padded_batch[k] = torch.cat([v, pad_sequence], dim=0)
 
-        padded_active_batch = DataProto.from_dict(padded_batch)
+        padded_active_batch = DataProto.from_dict(padded_batch, meta_info=dict(active_batch.meta_info))
         for key in padded_active_batch.batch.keys():
             padded_active_batch.batch[key] = padded_active_batch.batch[key].long()
 
@@ -217,18 +256,35 @@ class LLMGenerationManager:
         padded_output.batch = trimmed_batch
         return padded_output
 
-    def run_llm_loop(self, gen_batch, initial_input_ids: torch.Tensor) -> Tuple[Dict, Dict]:
-        """Run main LLM generation loop."""
-        
+    def run_llm_loop(self, gen_batch, initial_input_ids: torch.Tensor, golden_docs: List[Dict] = None) -> Tuple[Dict, Dict]:
+        """Run main LLM generation loop.
+
+        golden_docs: in golden retriever modes, one {'gold', 'neg', 'order'} record
+        per batch row, in batch order. Ignored in live mode.
+        """
+
         original_left_side = {'input_ids': initial_input_ids[:, -self.config.max_start_length:]}
         original_right_side = {'responses': initial_input_ids[:, []], 'responses_with_info_mask': initial_input_ids[:, []]}
-        
+
         active_mask = torch.ones(gen_batch.batch['input_ids'].shape[0], dtype=torch.bool)
         turns_stats = torch.ones(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
         valid_action_stats = torch.zeros(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
         valid_search_stats = torch.zeros(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
         active_num_list = [active_mask.sum().item()]
         rollings = gen_batch
+
+        # Golden mode: format each row's observation once, not once per turn.
+        golden_ctx = None
+        if self.config.retriever_mode != 'live':
+            batch_size = gen_batch.batch['input_ids'].shape[0]
+            if golden_docs is None or len(golden_docs) != batch_size:
+                raise ValueError(
+                    f"retriever_mode={self.config.retriever_mode!r} needs one golden record per row; "
+                    f"got {None if golden_docs is None else len(golden_docs)} for batch of {batch_size}. "
+                    "Is data.val_files a *_docs.parquet build?")
+            golden_ctx = [self._golden_passages(rec) for rec in golden_docs]
+            self.multi_subquery_searches = 0
+            self.total_searches = 0
 
         # Main generation loop
         for step in range(self.config.max_turns):
@@ -240,9 +296,7 @@ class LLMGenerationManager:
             )
             
             # gen_output = self.actor_rollout_wg.generate_sequences(rollings)
-            rollings_active = DataProto.from_dict({
-                k: v[active_mask] for k, v in rollings.batch.items()
-            })            
+            rollings_active = self._active_subset(rollings, active_mask)
             gen_output = self._generate_with_gpu_padding(rollings_active)
 
             meta_info = gen_output.meta_info            
@@ -251,9 +305,14 @@ class LLMGenerationManager:
 
             # Execute in environment and process observations
             next_obs, dones, valid_action, is_search = self.execute_predictions(
-                responses_str, self.tokenizer.pad_token, active_mask
+                responses_str, self.tokenizer.pad_token, active_mask, golden_ctx=golden_ctx
             )
-            
+
+            # The only direct evidence that the oracle context reached the model.
+            if golden_ctx is not None and step == 0:
+                print(f"[golden:{self.config.retriever_mode}] row 0 response: {responses_str[0][-500:]!r}")
+                print(f"[golden:{self.config.retriever_mode}] row 0 observation: {next_obs[0][:600]!r}")
+
             curr_active_mask = torch.tensor([not done for done in dones], dtype=torch.bool)
             active_mask = active_mask * curr_active_mask
             active_num_list.append(active_mask.sum().item())
@@ -283,9 +342,7 @@ class LLMGenerationManager:
             )
 
             # gen_output = self.actor_rollout_wg.generate_sequences(rollings)
-            rollings_active = DataProto.from_dict({
-                k: v[active_mask] for k, v in rollings.batch.items()
-            })            
+            rollings_active = self._active_subset(rollings, active_mask)
             gen_output = self._generate_with_gpu_padding(rollings_active)
 
             meta_info = gen_output.meta_info            
@@ -315,7 +372,12 @@ class LLMGenerationManager:
         meta_info['valid_search_stats'] = valid_search_stats.tolist()
         
         print("ACTIVE_TRAJ_NUM:", active_num_list)
-        
+        if golden_ctx is not None:
+            # Golden mode answers every subquery with the same doc set, erasing the
+            # decomposition signal; report how often that happened.
+            print(f"GOLDEN_SEARCHES: {self.total_searches} total, "
+                  f"{self.multi_subquery_searches} multi-subquery (collapsed to one doc set)")
+
         return self._compose_final_output(original_left_side, original_right_side, meta_info)
 
     def _compose_final_output(self, left_side: Dict,
@@ -404,20 +466,30 @@ class LLMGenerationManager:
             
 #         return next_obs, dones, valid_action, is_search
 
-    def execute_predictions(self, predictions: List[str], pad_token: str, active_mask=None, do_search=True) -> List[str]:
+    def execute_predictions(self, predictions: List[str], pad_token: str, active_mask=None, do_search=True, golden_ctx=None) -> List[str]:
         cur_actions, contents = self.postprocess_predictions(predictions)
         next_obs, dones, valid_action, is_search = [], [], [], []
+        use_golden = do_search and golden_ctx is not None
 
         # Flatten subqueries for batch_search
         search_queries = []
         search_indices = []
-        for idx, (action, content) in enumerate(zip(cur_actions, contents)):
-            if action == 'search':
-                for subquery in content:
-                    search_queries.append(subquery)
-                    search_indices.append(idx)
+        if not use_golden:
+            for idx, (action, content) in enumerate(zip(cur_actions, contents)):
+                if action == 'search':
+                    for subquery in content:
+                        search_queries.append(subquery)
+                        search_indices.append(idx)
 
-        if do_search:
+        if use_golden:
+            # Same shape as the live list below -- compacted, ascending row order --
+            # so the pop(0) consumption and the final assert hold unchanged. i is the
+            # original batch row: predictions stay full-batch via _example_level_pad.
+            search_results = [golden_ctx[i] for i in range(len(cur_actions)) if cur_actions[i] == 'search']
+            n_multi = sum(1 for a, c in zip(cur_actions, contents) if a == 'search' and len(c) > 1)
+            self.total_searches = getattr(self, 'total_searches', 0) + len(search_results)
+            self.multi_subquery_searches = getattr(self, 'multi_subquery_searches', 0) + n_multi
+        elif do_search:
             search_results_flat = self.batch_search(search_queries)
             # Group results by original prediction
             from collections import defaultdict
@@ -428,6 +500,11 @@ class LLMGenerationManager:
             search_results = [' ## '.join(grouped_results[i]) for i in range(len(cur_actions)) if cur_actions[i] == 'search']
         else:
             search_results = [''] * sum([1 for action in cur_actions if action == 'search'])
+
+        # search_results covers ALL search rows but is popped only for active ones;
+        # an inactive search row would shift every later row onto the wrong result.
+        assert not any(a == 'search' and not act for a, act in zip(cur_actions, active_mask)), \
+            "inactive row produced a 'search' action; search_results would desync"
 
         for i, (action, active) in enumerate(zip(cur_actions, active_mask)):
             if not active:
@@ -541,6 +618,10 @@ class LLMGenerationManager:
             List of search results, each as a string
         """
         results = self._batch_search(queries)['result']
+        if self.config.repeat_docs < 1:
+            raise ValueError(f"repeat_docs must be >= 1, got {self.config.repeat_docs}")
+        if self.config.repeat_docs > 1:
+            results = [[doc for doc in result for _ in range(self.config.repeat_docs)] for result in results]
         return [self._passages2string(result) for result in results]
 
     def _batch_search(self, queries):
@@ -552,6 +633,27 @@ class LLMGenerationManager:
         }
         
         return requests.post(self.config.search_url, json=payload).json()
+
+    def _golden_passages(self, rec: Dict) -> str:
+        """Observation text for one row in golden mode, formatted exactly like live results."""
+        gold, neg, order = rec.get('gold') or '', rec.get('neg') or '', rec.get('order') or 'gold,neg'
+        rand = rec.get('rand') or ''
+        if not gold.strip():
+            raise ValueError(f"empty gold_doc in retriever_mode={self.config.retriever_mode!r}: {rec!r}")
+        if self.config.retriever_mode == 'golden':
+            if self.config.golden_copies < 1:
+                raise ValueError(f"golden_copies must be >= 1, got {self.config.golden_copies}")
+            docs = [gold] * self.config.golden_copies
+        elif self.config.retriever_mode in ('golden_hn', 'golden_rn'):
+            # Same slot for gold in both, so only the distractor differs between runs.
+            col = 'hard_neg_doc' if self.config.retriever_mode == 'golden_hn' else 'rand_neg_doc'
+            other = neg if self.config.retriever_mode == 'golden_hn' else rand
+            if not other.strip():
+                raise ValueError(f"retriever_mode={self.config.retriever_mode!r} but {col} is empty: {rec!r}")
+            docs = [gold, other] if order == 'gold,neg' else [other, gold]
+        else:
+            raise ValueError(f"unknown retriever_mode {self.config.retriever_mode!r}")
+        return self._passages2string([{'document': {'contents': c}} for c in docs])
 
     def _passages2string(self, retrieval_result):
         format_reference = ''

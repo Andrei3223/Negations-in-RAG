@@ -401,6 +401,12 @@ def main_task(config):
                               reward_cfg=reward_cfg,
                               use_answerability=False,
                               score_fn=qa_em.compute_score_f1)
+    # Per-row 1/0 flag for "no usable answer", reported as val/no_answer_rate.
+    val_no_answer_fn = RewardManager(tokenizer=tokenizer,
+                                     num_examine=0,
+                                     reward_cfg=reward_cfg,
+                                     use_answerability=False,
+                                     score_fn=qa_em.compute_no_answer)
 
     resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)
     trainer = RayPPOTrainer(config=config,
@@ -411,6 +417,7 @@ def main_task(config):
                             reward_fn=reward_fn,
                             val_reward_fn=val_reward_fn,
                             val_f1_fn=val_f1_fn,
+                            val_no_answer_fn=val_no_answer_fn,
                             )
     trainer.init_workers()
     try:
