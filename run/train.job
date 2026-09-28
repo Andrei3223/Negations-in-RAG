@@ -49,6 +49,12 @@ conda activate "$TRAIN_ENV"
 echo "node=$(hostname)  job=${SLURM_JOB_ID:-none}  gpus=${CUDA_VISIBLE_DEVICES:-unset}"
 
 # --- Wait for the retriever ----------------------------------------------------
+# Recommended launch, so this job starts only once the retriever has, and aborts
+# early if the retriever dies:
+#
+#   RID=$(sbatch --parsable run/retrieval.job)
+#   sbatch --dependency=after:$RID --export=ALL,CONFIG_NAME=...,RETRIEVER_JOB_ID=$RID run/train.job
+#
 # Index load takes ~15-30 min, so allow an hour. Probing /retrieve rather than
 # just checking the file catches a retriever that published its endpoint and
 # then died during index load.
@@ -60,7 +66,7 @@ for i in $(seq 1 720); do
         case "$url" in
             http*) ;;                                  # full endpoint
             "")    url="" ;;
-            *)     url="http://$url:$RETRIEVER_PORT" ;; # bare IP (older format)
+            *)     url="http://$url:${RETRIEVER_PORT:-8000}" ;; # bare IP (older format)
         esac
         if [ -n "$url" ] && curl -sf --max-time 10 "$url/retrieve" \
                 -H 'Content-Type: application/json' \
@@ -69,6 +75,16 @@ for i in $(seq 1 720); do
             echo "Retriever ready at $retriever_url (waited ~$((i * 5))s)"
             break
         fi
+    fi
+    # Stop waiting as soon as the retriever job itself is gone. Without this, job
+    # 347162 held 4 L40s idle for 41 min after its retriever had already died.
+    # Only possible when told which job to watch (see RETRIEVER_JOB_ID below);
+    # checked every ~minute to keep squeue load negligible.
+    if [ -n "${RETRIEVER_JOB_ID:-}" ] && [ $((i % 12)) -eq 0 ] \
+            && [ -z "$(squeue -h -j "$RETRIEVER_JOB_ID" -o %T 2>/dev/null)" ]; then
+        echo "ERROR: retriever job $RETRIEVER_JOB_ID is no longer running and never answered."
+        echo "  Check logs/subsearch-retriever-$RETRIEVER_JOB_ID.err"
+        exit 1
     fi
     sleep 5
 done

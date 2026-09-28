@@ -40,8 +40,11 @@ export BASE_MODEL="Qwen/Qwen2.5-3B"
 export SAVE_DIR_BASE="/fnwi_fs/ivi/irlab/personal/16207041/verl_checkpoints"
 
 # --- Retriever handshake --------------------------------------------------------
-# retrieval.job writes "http://<node-ip>:<port>" here; train.job polls it.
-export RETRIEVER_PORT=8000
+# retrieval.job writes "http://<node-ip>:<port>" here once it has reserved a port;
+# train.job and smoke.job poll it. The port is deliberately NOT fixed here: the
+# retriever derives one from its job id and walks forward if it is taken, because
+# a hard-coded 8000 collided with other users' services (job 347161). Export
+# RETRIEVER_PORT yourself only to pin the starting port.
 export RETRIEVER_IP_PATH="$REPO_ROOT/retriever_url.txt"
 
 mkdir -p "$HF_HOME" "$TRITON_CACHE_DIR" "$SAVE_DIR_BASE" "$REPO_ROOT/logs"

@@ -55,7 +55,7 @@ for i in $(seq 1 60); do
         case "$url" in
             http*) ;;
             "")    url="" ;;
-            *)     url="http://$url:$RETRIEVER_PORT" ;;
+            *)     url="http://$url:${RETRIEVER_PORT:-8000}" ;;
         esac
         if [ -n "$url" ] && curl -sf --max-time 10 "$url/retrieve" \
                 -H 'Content-Type: application/json' \

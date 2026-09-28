@@ -358,8 +358,48 @@ def retrieve_endpoint(request: QueryRequest):
     return {"result": resp}
 
 
+def reserve_port(host: str, port: int, tries: int = 1):
+    """Bind, without listening, the first free port in [port, port + tries).
+
+    Called BEFORE the index is loaded. The old order -- load 60 GB for ~20 min,
+    then let uvicorn bind -- meant a taken port was only discovered at the very
+    end: job 347161 loaded the whole index and then died with "[Errno 98] address
+    already in use" on 8000, the default port of `vllm serve` and most FastAPI
+    apps on these shared nodes.
+
+    Bound but not listening, the port is ours for the whole load while any
+    connection to it is refused immediately, so a polling trainer fails its probe
+    fast instead of hanging. uvicorn calls listen() when it starts serving on
+    the socket. port=0 lets the OS choose.
+    """
+    import socket
+    last_err = None
+    for candidate in range(port, port + max(1, tries)):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # Only lets us reuse a port lingering in TIME_WAIT; it does NOT allow
+        # binding a port another live socket holds.
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, candidate))
+        except OSError as exc:
+            sock.close()
+            last_err = exc
+            continue
+        return sock, sock.getsockname()[1]
+    raise SystemExit(f"[retriever] no free port in {port}..{port + max(1, tries) - 1} "
+                     f"on {host}: {last_err}")
+
+
+def publish_endpoint(path: str, url: str):
+    """Write the endpoint atomically, so a poller never reads a half-written URL."""
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "w") as f:
+        f.write(url + "\n")
+    os.replace(tmp, path)
+
+
 if __name__ == "__main__":
-    
+
     parser = argparse.ArgumentParser(description="Launch the local faiss retriever.")
     parser.add_argument("--index_path", type=str, default="/home/peterjin/mnt/index/wiki-18/e5_Flat.index", help="Corpus indexing file.")
     parser.add_argument("--corpus_path", type=str, default="/home/peterjin/mnt/data/retrieval-corpus/wiki-18.jsonl", help="Local corpus file.")
@@ -367,10 +407,28 @@ if __name__ == "__main__":
     parser.add_argument("--retriever_name", type=str, default="e5", help="Name of the retriever model.")
     parser.add_argument("--retriever_model", type=str, default="intfloat/e5-base-v2", help="Path of the retriever model.")
     parser.add_argument('--faiss_gpu', action='store_true', help='Use GPU for computation')
-    parser.add_argument("--port", type=int, default=8000, help="Port to serve /retrieve on.")
+    parser.add_argument("--port", type=int, default=8000,
+                        help="Port to serve /retrieve on (first one tried; 0 = let the OS choose).")
+    parser.add_argument("--port_tries", type=int, default=1,
+                        help="If --port is taken, try this many consecutive ports.")
+    parser.add_argument("--endpoint_file", type=str, default=None,
+                        help="Once the port is reserved, write http://<host_ip>:<port> here.")
+    parser.add_argument("--host_ip", type=str, default=None,
+                        help="Address to advertise in --endpoint_file (default: resolve hostname).")
 
     args = parser.parse_args()
-    
+
+    # 0) Reserve the port before the expensive index load, and advertise the port we
+    #    actually got -- which may differ from --port if that one was taken.
+    server_socket, port = reserve_port("0.0.0.0", args.port, args.port_tries)
+    print(f"[retriever] reserved port {port}", flush=True)
+    if args.endpoint_file:
+        import socket
+        host_ip = args.host_ip or socket.gethostbyname(socket.gethostname())
+        publish_endpoint(args.endpoint_file, f"http://{host_ip}:{port}")
+        print(f"[retriever] endpoint published to {args.endpoint_file} -> http://{host_ip}:{port}",
+              flush=True)
+
     # 1) Build a config (could also parse from arguments).
     #    In real usage, you'd parse your CLI arguments or environment variables.
     config = Config(
@@ -389,5 +447,7 @@ if __name__ == "__main__":
     # 2) Instantiate a global retriever so it is loaded once and reused.
     retriever = get_retriever(config)
     
-    # 3) Launch the server. By default, it listens on http://127.0.0.1:8000
-    uvicorn.run(app, host="0.0.0.0", port=args.port)
+    # 3) Serve on the socket reserved in step 0, so the port cannot have been taken
+    #    by anyone else during the index load.
+    print(f"[retriever] index loaded; serving on port {port}", flush=True)
+    uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=port)).run(sockets=[server_socket])
