@@ -3,15 +3,15 @@
 Where each piece runs, what it costs, and why the current settings are what they
 are. Every number below was measured on this cluster with `sacct` or read out of
 a job log — none are estimates. Reference run: **342904** (most recent completed
-training; cn119, 4x L40, 25.3 h, 13 steps).
+training; cn119, 4x L40, 25.3 h, 150 steps).
 
 ## Nodes in the `gpu` partition
 
 | node | GPUs | host RAM | fits training *with* checkpoints (400G)? |
 |---|---|---|---|
-| **cn119** | 8x nvidia_l40 | **756 GiB** | yes — the only node that fits two such jobs |
-| **cn120** | 8x nvidia_rtx_a6000 | 504 GiB | yes |
-| **cn117** | 8x nvidia_rtx_a6000 | 312 GiB | yes, one job |
+| **cn119** | 8x nvidia_l40 | **756 GiB** | yes, one — plus a 100G retriever beside it |
+| **cn120** | 8x nvidia_rtx_a6000 | 504 GiB | yes, one |
+| cn117 | 8x nvidia_rtx_a6000 | 312 GiB | **no** — 320,000 MB < 400G; `sbatch` rejects it |
 | cn118 | 8x nvidia_rtx_a6000 | 250 GiB | **no** — use for the retriever |
 | cn116 | 4x nvidia_rtx_a6000 | 251 GiB | **no** — retriever, or training with `save_freq: 0` |
 | cn101–115 | Titan X / Xp / V, P40 | 250 GiB | no — GPUs far too small for a 3B policy |
@@ -85,9 +85,10 @@ Two separate killers enforce this:
   request — `slurmstepd: Detected 1 oom_kill event`.
 - **Ray's memory monitor**, which triggers on **node-wide** usage at 95%, not on
   your cgroup. Job 339329 died this way on cn117. Two large jobs on a small node
-  can therefore kill each other; cn119's 756 GiB is why it is the safe place to
-  co-locate. Raise with `RAY_memory_usage_threshold=0.97` if needed, but prefer
-  more `--mem`.
+  can therefore kill each other. cn119's 756 GiB makes it the safe place to put a
+  trainer and a retriever together (400G + 100G); it cannot take two 400G trainers
+  (773,668 MB < 819,200 MB). Raise with `RAY_memory_usage_threshold=0.97` if
+  needed, but prefer more `--mem`.
 
 ## Running it
 

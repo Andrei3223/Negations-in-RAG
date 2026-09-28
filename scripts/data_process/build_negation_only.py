@@ -53,7 +53,10 @@ def question_of(prompt_cell):
     return prompt_cell[0]['content'].split('Question: ', 1)[-1].strip()
 
 
-def print_example(before_df, after_df):
+TEMPLATE_LABEL = {'base': 'base / Search-R1', 'decomposed': 'decomposed / SubSearch'}
+
+
+def print_example(before_df, after_df, src_tmpl, dst_tmpl):
     print('\n' + '=' * 78)
     print('HOW THE INPUT DATA DIFFERS')
     print('=' * 78)
@@ -65,7 +68,11 @@ def print_example(before_df, after_df):
     print(f"gold answer : {list(row.reward_model['ground_truth']['target'])}")
     print(f"\nOnly the `prompt` field changes. Everything else -- data_source, ability,")
     print(f"reward_model.ground_truth, extra_info -- is copied through untouched.\n")
-    for name, text in (('BEFORE (base / Search-R1)', b), ('AFTER (decomposed / SubSearch)', a)):
+    if src_tmpl == dst_tmpl:
+        print(f"Source and target are both the {src_tmpl!r} template, so the prompt is\n"
+              f"unchanged too; the build only filters rows and validates the prefix.\n")
+    for name, text in ((f'BEFORE ({TEMPLATE_LABEL.get(src_tmpl, src_tmpl)})', b),
+                       (f'AFTER ({TEMPLATE_LABEL.get(dst_tmpl, dst_tmpl)})', a)):
         print('-' * 78)
         print(f'{name}   [{len(text)} chars]')
         print('-' * 78)
@@ -73,7 +80,7 @@ def print_example(before_df, after_df):
         print()
 
 
-def print_stats(splits):
+def print_stats(splits, dst_tmpl):
     try:
         from transformers import AutoTokenizer
         tok = AutoTokenizer.from_pretrained('Qwen/Qwen2.5-3B')
@@ -107,7 +114,7 @@ def print_stats(splits):
 
     full = pd.concat(splits.values())
     p_tok = full.prompt.apply(lambda p: enc(p[0]['content']))
-    print(f'\nfull prompt length (decomposed template): mean {p_tok.mean():.0f} '
+    print(f'\nfull prompt length ({dst_tmpl} template): mean {p_tok.mean():.0f} '
           f'/ max {p_tok.max()} tokens, over {len(full):,} rows')
 
     print('\nStructure: both sources are contrastive pairs -- adjacent rows are the')
@@ -155,8 +162,8 @@ def main():
         counts = ', '.join(f'{k}={v:,}' for k, v in conv.data_source.value_counts().items())
         print(f'  {split:<6} {len(conv):>6,} rows -> {path}   ({counts})')
 
-    print_example(raw['train'], out['train'])
-    print_stats(out)
+    print_example(raw['train'], out['train'], args.src_tmpl, args.dst_tmpl)
+    print_stats(out, args.dst_tmpl)
 
 
 if __name__ == '__main__':

@@ -1,0 +1,95 @@
+# Search-R1 negation finetune: the Search-R1 baseline for subsearch_negation_ft.
+#
+#   RID=$(sbatch --parsable run/retrieval.job)
+#   sbatch --dependency=after:$RID --time=2-00:00:00 \
+#          --export=ALL,CONFIG_NAME=searchr1_negation_ft,RETRIEVER_JOB_ID=$RID run/train.job
+#
+# The --dependency matters: the trainer polls for a retriever for only 60 min, and
+# the scheduler can place it hours before the retriever. `after:` holds it until the
+# retriever has started; the poll then covers the 15-30 min index load.
+# RETRIEVER_JOB_ID makes the trainer give up as soon as that retriever job ends,
+# instead of holding 4 GPUs for the rest of the hour (job 347162).
+#
+# WHAT IT IS: the published Search-R1 checkpoint finetuned on the same 1,782 negation
+#   rows as subsearch_negation_ft, with Search-R1's base prompt and plain EM reward.
+#   No code differs -- this branch runs Search-R1 whenever use_answerability is off and
+#   the prompt never mentions '##' (single queries pass through the sub-query splitter
+#   unchanged).
+#
+# COMPARING WITH subsearch_negation_ft: batch size, LR, warmup, mini/micro batch, step
+#   count, save/test cadence and the 1352 validation rows are identical. Deliberately
+#   different: starting model, prompt template, reward, topk (3 vs 2) and
+#   max_obs_length (900 vs 1200). So this compares methods, not a single knob.
+#
+# Declares its own train_files / val_files / model.path, so train_grpo.sh keeps them
+# rather than injecting $DATA_PATH / $BASE_MODEL from run/env.sh.
+
+defaults:
+  - subsearch_grpo
+  - _self_
+
+data:
+  # Built by: python scripts/data_process/build_negation_only.py --to base --dst data/negation_only_base
+  # Same rows as negation_only_decomposed (verified row-for-row: questions, gold,
+  # data_source, pair_id/query_role); only the prompt differs.
+  train_files: /home/16207041/Negations-in-RAG/data/negation_only_base/train.parquet
+
+  # The BASE-template combined val. Row-for-row identical to the decomposed val that
+  # subsearch_negation_ft uses apart from the prompt, so the two runs are scored on the
+  # same 1352 questions: nq/hotpotqa expose forgetting, nevir/negations-free get the
+  # paired metrics (val/per_instance_acc, val/n_pairs = 118 / 58).
+  val_files: /home/16207041/Negations-in-RAG/data/combined_nq_hotpot_nevir_negfree_upsampled/val.parquet
+
+  train_batch_size: 128   # 1782/128 = 13 batches/epoch (drop_last=True)
+  val_batch_size: 676     # 1352/676 = 2 batches; the negation-only 352-row val would give 0 and assert
+
+  # Measured on 1,390 real 3-doc observations from a topk-3 run with this checkpoint's
+  # tokenizer: median 467, p90 536 tokens. Truncated: 500 -> 26.0%, 900 -> 2.4%,
+  # 1200 -> 2.4%. 900 keeps the same content as 1200 in less context. Upstream
+  # Search-R1 used 500, which clips a quarter of observations.
+  max_obs_length: 900
+
+actor_rollout_ref:
+  model:
+    # Published Search-R1 (PeterJinGo), trained from Qwen/Qwen2.5-3B with this exact base
+    # prompt. Local only -- not in the shared project space.
+    path: /home/16207041/Negations-in-RAG/checkpoints/SearchR1-nq_hotpotqa_train-qwen2.5-3b-em-grpo
+  actor:
+    optim:
+      # Matched to subsearch_negation_ft. Note that run collapsed after step 100 at this
+      # LR, but its reward was the SubSearch reward and was contaminated by the prompt-
+      # extractor bug; this one is plain EM. Checkpoints every 25 steps allow picking a
+      # pre-collapse one if it recurs.
+      lr: 5e-7
+      lr_warmup_steps_ratio: 0.05
+    # 128 x n_agent 5 = 640 rollouts, 160 per GPU; mini 128 -> 32/GPU -> 5 mini-batches,
+    # micro 16 -> 4/GPU. Both are divided by world size in fsdp_workers.py.
+    ppo_mini_batch_size: 128
+    ppo_micro_batch_size: 16
+
+reward_model:
+  # Search-R1's reward: exact match only, no answerability or decomposition terms.
+  use_answerability: false
+  # Despite the name, with use_answerability off this ALSO sets add_format for the
+  # training reward (_select_rm_score_fn in main_ppo.py). false = Search-R1 v0.2 plain EM;
+  # true would reproduce v0.3's format shaping but also change validation scoring.
+  val_add_format: false
+
+retriever:
+  topk: 3   # upstream Search-R1 value; subsearch_negation_ft inherited 2
+
+trainer:
+  project_name: SearchR1-negation-ft
+  experiment_name: searchr1-negation-ft-lr5e-7-topk3-obs900
+
+  total_training_steps: 150   # same as subsearch_negation_ft
+  # fit() loops total_epochs x len(train_dataloader); at 13 batches/epoch the inherited
+  # 15 epochs would cap the run at 195 steps and skip the final validation. 100 lets the
+  # step limit bind.
+  total_epochs: 100
+
+  # save_freq > 0 is what forces --mem=400G: the checkpoint gather peaks near 250 GiB
+  # regardless of batch size (docs/cluster-gpu-memory.md).
+  save_freq: 25
+  test_freq: 25
+  val_before_train: true   # step-0 Search-R1 baseline on this val set
