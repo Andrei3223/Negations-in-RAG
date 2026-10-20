@@ -1,0 +1,14 @@
+# @package _global_
+# SPLADE-v3 (naver/splade-v3) over the custom doc1/doc2 corpus (data/custom_index_splade_v3,
+# built by run/run_splade_eval.sh). top-1 shown twice (avoids the lone-passage
+# failure). Compare with eval/retriever=custom_x2 (stock e5) and negft_custom_x2.
+retriever:
+  topk: 1
+  repeat_docs: 2
+
+retriever_server:
+  index_path: data/custom_index_splade_v3
+  corpus_path: data/custom_index/corpus.jsonl
+  # naver/splade-v3 as safetensors (scripts/convert_to_safetensors.py)
+  model_path: /fnwi_fs/ivi/irlab/personal/16207041/models/splade-v3
+  name: splade

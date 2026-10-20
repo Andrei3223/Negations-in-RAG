@@ -409,8 +409,8 @@ def add_formatting(reward_score, solution_str, ground_truth, method='strict', st
             else:
                 return final_format_score
 
-def compute_score_em(solution_str, ground_truth, training_step=0, method='strict', format_score=0., score=1., add_format=True, structure_format_score=0.2, final_format_score=0.1, retrieval_score=0.1, decomposition_bonus=0.0, log_sample_rate=64):
-    """The scoring function for exact match (EM).
+def compute_score_em(solution_str, ground_truth, training_step=0, method='strict', format_score=0., score=1., add_format=True, structure_format_score=0.2, final_format_score=0.1, retrieval_score=0.1, decomposition_bonus=0.0, log_sample_rate=64, em_weight=1.0):
+    """The scoring function for exact match (EM), optionally blended with token F1.
 
     Args:
         solution_str: the solution text
@@ -418,6 +418,9 @@ def compute_score_em(solution_str, ground_truth, training_step=0, method='strict
         method: the method to extract the solution, choices are 'strict' and 'flexible'
         format_score: the score for the format
         score: the score for the correct answer
+        em_weight: answer score = score * (em_weight * EM + (1 - em_weight) * F1).
+            1.0 (default) is plain EM, exactly as before; 0.5 gives 0.5*EM + 0.5*F1.
+            An answer with no credit from either still gets format_score.
     """
     answer = extract_solution(solution_str=solution_str)
     do_print = random.randint(1, log_sample_rate) == 1
@@ -427,7 +430,9 @@ def compute_score_em(solution_str, ground_truth, training_step=0, method='strict
         final_score = 0
     else:
         em_result = em_check(answer, ground_truth['target'])
-        final_score = score if em_result else format_score
+        f1 = token_f1_score(answer, ground_truth['target']) if em_weight < 1.0 else 0.0
+        answer_score = em_weight * em_result + (1.0 - em_weight) * f1
+        final_score = score * answer_score if answer_score > 0 else format_score
 
     if add_format:
         final_score = add_formatting(
@@ -993,13 +998,15 @@ def compute_score_em_plus_answerability_decomposition(
     decomp_coeff_identical_to_parent: float = 0.85,
     decomp_coeff_coverage: float = 0.5,
     decomp_coeff_disimilar: float = 0.5,
+    em_weight: float = 1.0,
 ):
     """
     Combined reward:
       r = r_answer + beta * (w_ans * r_answerability + w_dec * r_decomposition) * (1 - r_answer)
 
     Where:
-      r_answer in {0, 1} — exact match on final answer
+      r_answer in [0, 1] — em_weight * EM + (1 - em_weight) * token F1 on the final
+                            answer; {0, 1} exact match at the default em_weight=1.0
       r_answerability in [0, 1] — do retrieved docs answer the subqueries
       r_decomposition in [0, 1] — quality of query decomposition at each search step
       beta controls max bonus for good intermediate behavior on a failed answer
@@ -1016,6 +1023,7 @@ def compute_score_em_plus_answerability_decomposition(
         format_score=format_score,
         score=score,
         add_format=False,
+        em_weight=em_weight,
     )
 
     judge_fn = _get_judge_fn()

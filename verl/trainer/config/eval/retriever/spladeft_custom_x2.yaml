@@ -1,0 +1,15 @@
+# @package _global_
+# Fine-tuned SPLADE-v3 (retriever_finetune model=splade_v3: Plackett-Luce on NevIR + NFS
+# train pairs + MS MARCO replay + FLOPS, lambda_d=0.003; best = step 270 by val pairwise
+# acc). Indexes built by SPLADE_RUN=ft run/run_splade_eval.sh with no term cap.
+# Custom doc1/doc2 corpus (data/custom_index_spladeft), top-1 shown 2x.
+# Compare with custom_x2 (e5), negft_custom_x2 (fine-tuned e5), splade_custom_x2 (SPLADE-v3).
+retriever:
+  topk: 1
+  repeat_docs: 2
+
+retriever_server:
+  index_path: data/custom_index_spladeft
+  corpus_path: data/custom_index/corpus.jsonl
+  model_path: /fnwi_fs/ivi/irlab/personal/16207041/retriever_checkpoints/splade-v3-negft-lam0.3-neg2-marco1782/20261014-140623/best
+  name: splade

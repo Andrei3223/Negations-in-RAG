@@ -1,0 +1,38 @@
+# Golden-document finetune, setup 2: NevIR + all clean negations-free, no retrieval.
+#
+#   sbatch --time=2-00:00:00 --export=ALL,CONFIG_NAME=golden_nevir_nfwa,NO_RETRIEVER=1 run/train.job
+#
+# Same as golden_nevir_nfs (see there) with negations-free-with-answer (_clean2, all
+# 10 negation types) in place of its 4-type sentence subset, which it contains.
+# Note docs/datasets.md: types 2-4 are mostly yes/no answers and 7-9 have weaker
+# answers, so this setup trades answer quality for 1.7x the data.
+#
+# DATA: python scripts/data_process/build_golden_training.py --setup nevir_nfwa
+#   train 2,880 rows (1,440 pairs), val 494 rows (247 pairs). Negations-free is the
+#   conflict-filtered _clean2 (scripts/data_process/drop_conflicting_pairs.py).
+
+defaults:
+  - golden_nevir_nfs
+  - _self_
+
+data:
+  train_files: /home/16207041/Negations-in-RAG/data/golden_nevir_nfwa/train.parquet
+  val_files: /home/16207041/Negations-in-RAG/data/golden_nevir_nfwa/val.parquet
+  val_batch_size: 494     # 2880/128 = 22 batches/epoch; val in one batch
+
+actor_rollout_ref:
+  model:
+    path: /home/16207041/Negations-in-RAG/checkpoints/SearchR1-nq_hotpotqa_train-qwen2.5-3b-em-grpo
+
+reward_model:
+  answer_em_weight: 0.5   # training answer score = 0.5*EM + 0.5*F1
+
+retriever:
+  mode: golden_hn_rn
+  live_fallback: false
+
+trainer:
+  experiment_name: golden-nevir-nfwa-lr${actor_rollout_ref.actor.optim.lr}-em${reward_model.answer_em_weight}
+  total_training_steps: 88   # 22 batches/epoch x 4 epochs, as golden_nevir_nfs
+  test_freq: 22              # every epoch
+  save_freq: 44              # divides 88 so the last step is saved

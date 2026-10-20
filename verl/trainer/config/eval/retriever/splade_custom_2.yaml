@@ -1,0 +1,15 @@
+# @package _global_
+# SPLADE-v3 (naver/splade-v3) over the custom doc1/doc2 corpus, indexed with
+# subsearch/search/splade_index_builder.py into data/custom_index_splade_v3 (built by
+# run/run_splade_eval.sh). top-2. Compare with eval/retriever=custom_2 (stock e5) and
+# negft_custom_2 (fine-tuned e5).
+retriever:
+  topk: 2
+  repeat_docs: 1
+
+retriever_server:
+  index_path: data/custom_index_splade_v3
+  corpus_path: data/custom_index/corpus.jsonl
+  # naver/splade-v3 as safetensors (scripts/convert_to_safetensors.py)
+  model_path: /fnwi_fs/ivi/irlab/personal/16207041/models/splade-v3
+  name: splade

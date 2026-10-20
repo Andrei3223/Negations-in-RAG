@@ -1,0 +1,14 @@
+# @package _global_
+# Fine-tuned e5 (e5-negft-lam0.3-neg2, best checkpoint) over wiki-18 re-encoded with it,
+# served by a dedicated run/retrieval.job that publishes to retriever_url_negft.txt
+# (run/run_negft_eval.sh starts it), so it never collides with the stock wiki retriever.
+# Top-3, as eval/retriever=running / wiki.
+retriever:
+  topk: 3
+
+retriever_server:
+  use_running: true
+  url: null
+  url_file: /home/16207041/Negations-in-RAG/retriever_url_negft.txt
+  # Long: these jobs queue behind a retriever that first loads a fresh 65 GB index.
+  wait_minutes: 120

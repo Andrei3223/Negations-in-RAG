@@ -177,6 +177,10 @@ reward_model:
   method: strict
   format_score: 0.0
   score: 1.0
+  # Training answer score = answer_em_weight * EM + (1 - answer_em_weight) * token F1,
+  # for both rewards (Search-R1's plain EM and SubSearch's r_answer). 1.0 = plain EM
+  # as before; 0.5 = 0.5*EM + 0.5*F1. Validation always scores plain EM.
+  answer_em_weight: 1.0
 
   # r_intermediate = w_ans * r_answerability + w_dec * r_decomposition
   intermediate:
@@ -230,9 +234,14 @@ reward_model:
     - negations-free-with-answer
 
 retriever:
-  # live: POST each <search> to url. golden / golden_hn: return the row's gold_doc
-  # (+ hard_neg_doc) from the parquet, no server -- see eval/retriever/golden*.yaml.
+  # live: POST each <search> to url. golden / golden_hn / golden_rn / golden_hn_rn:
+  # return the row's gold_doc (+ hard_neg_doc and/or rand_neg_doc) from the parquet,
+  # no server -- see eval/retriever/golden*.yaml. golden_hn_rn shows all three in the
+  # row's doc_order3 (the golden training setups, config golden_*.yaml).
   mode: live
+  # golden modes only: rows with an empty gold_doc are searched live at `url`
+  # instead of raising -- lets one batch mix golden negation rows and live NQ/HotpotQA.
+  live_fallback: false
   # mode golden only: copies of the gold doc per <search>. With 1, SearchR1 (trained
   # with topk=3) reads the block as unfinished and writes fake "Doc 2"/"Doc 3".
   golden_copies: 2

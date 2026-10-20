@@ -78,3 +78,8 @@ algorithm:
   no_think_rl: false
 
 max_turns: 4
+
+reward_model:
+  # Log every row's trace and extracted answer (training keeps 1-in-64), so
+  # scripts/eval_3x.py can re-score each answer offline, e.g. with BERTScore.
+  log_sample_rate: 1

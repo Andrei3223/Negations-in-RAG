@@ -1,0 +1,14 @@
+# @package _global_
+# SPLADE-v3 (naver/splade-v3) over wiki-18, served by a dedicated run/retrieval.job
+# (RETRIEVER_NAME=splade) that publishes to retriever_url_splade.txt; run/run_splade_eval.sh
+# starts it, so it never collides with the stock or fine-tuned e5 retrievers.
+# Top-3, as eval/retriever=running / wiki / negft_wiki.
+retriever:
+  topk: 3
+
+retriever_server:
+  use_running: true
+  url: null
+  url_file: /home/16207041/Negations-in-RAG/retriever_url_splade.txt
+  # Long: these jobs queue behind a retriever that first loads the sparse shards.
+  wait_minutes: 120

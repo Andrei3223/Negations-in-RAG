@@ -1,0 +1,10 @@
+# @package _global_
+# Fixed 1,000-question subset of NQ test (scripts/data_process/make_qa_eval_subsets.py),
+# for checking whether negation fine-tuning cost general open-domain QA. Use with a live
+# wiki-18 retriever (eval/retriever=running). Scored with EM / F1; no pairs.
+dataset_id: nq-test-1k
+data:
+  train_files: data/qa_eval/nq_test_1k.parquet
+  val_files: data/qa_eval/nq_test_1k.parquet
+  train_data_num: null
+  val_data_num: null

@@ -1,10 +1,11 @@
 # @package _global_
-# test_clean2 (294 complete q1/q2 pairs) with gold_doc / hard_neg_doc / doc_order
-# attached by scripts/data_process/negations_golden_docs.py. Use with
+# test_clean2 (284 complete q1/q2 pairs after drop_conflicting_pairs.py; 294 before,
+# kept in pre_conflict_filter/) with gold_doc / hard_neg_doc / rand_neg_doc /
+# doc_order / doc_order3 attached by scripts/data_process/negations_golden_docs.py. Use with
 # eval/retriever=golden | golden_hn; also works with live retrievers, which ignore
 # the extra columns.
 dataset_id: negations-free-with-answer-docs
-dataset_val_batch_size: 49   # 588 = 49 * 12, so the val loader's drop_last drops nothing
+dataset_val_batch_size: 71   # 568 = 71 * 8, so even a drop_last loader drops nothing
 data:
   train_files: data/negations_with_answer_rag/negations-free-with-answer/test_clean2_docs.parquet
   val_files: data/negations_with_answer_rag/negations-free-with-answer/test_clean2_docs.parquet

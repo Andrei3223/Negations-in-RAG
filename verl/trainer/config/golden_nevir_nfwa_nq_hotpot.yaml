@@ -1,0 +1,42 @@
+# Golden-document finetune, setup 3: golden_nevir_nfwa + NQ + HotpotQA with LIVE retrieval.
+#
+#   RID=$(sbatch --parsable run/retrieval.job)
+#   sbatch --dependency=after:$RID --time=3-00:00:00 \
+#          --export=ALL,CONFIG_NAME=golden_nevir_nfwa_nq_hotpot,RETRIEVER_JOB_ID=$RID run/train.job
+#
+# Negation rows are answered from their golden documents (gold + hard negative +
+# random); NQ / HotpotQA rows have no documents and are searched live on wiki-18
+# (retriever.live_fallback). The QA rows keep the search policy and general QA from
+# drifting while the negation rows train reading. Needs the retriever job.
+#
+# DATA: python scripts/data_process/build_golden_training.py --setup nevir_nfwa_nq_hotpot
+#   train 8,640 rows: negation 2,880 + NQ 2,880 + HotpotQA 2,880 (random, seed 42);
+#   val 994 rows: the golden_nevir_nfwa val + 250 NQ + 250 HotpotQA (live).
+
+defaults:
+  - golden_nevir_nfwa
+  - _self_
+
+data:
+  train_files: /home/16207041/Negations-in-RAG/data/golden_nevir_nfwa_nq_hotpot/train.parquet
+  val_files: /home/16207041/Negations-in-RAG/data/golden_nevir_nfwa_nq_hotpot/val.parquet
+  val_batch_size: 497     # 994 rows in 2 batches
+
+actor_rollout_ref:
+  model:
+    path: /home/16207041/Negations-in-RAG/checkpoints/SearchR1-nq_hotpotqa_train-qwen2.5-3b-em-grpo
+
+reward_model:
+  answer_em_weight: 0.5   # training answer score = 0.5*EM + 0.5*F1 (NQ/HotpotQA too)
+
+retriever:
+  mode: golden_hn_rn
+  live_fallback: true   # NQ / HotpotQA rows (empty gold_doc) go to the live retriever
+
+trainer:
+  experiment_name: golden-nevir-nfwa-nq-hotpot-lr${actor_rollout_ref.actor.optim.lr}-em${reward_model.answer_em_weight}
+  # 8640/128 = 67 batches/epoch. 2 epochs: each negation row is seen 2x (vs 4x in
+  # golden_nevir_nfwa) at ~1.5x its compute; matching its exposure would take 268 steps.
+  total_training_steps: 134
+  test_freq: 34              # every half epoch
+  save_freq: 67              # every epoch; divides 134 so the last step is saved

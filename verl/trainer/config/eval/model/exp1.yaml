@@ -1,0 +1,7 @@
+# @package _global_
+# Golden-trained checkpoint: base SearchR1 3B fine-tuned in golden_hn_rn mode on
+# NevIR + negations-free-sentence (job 351412); last checkpoint, step 52.
+model_id: golden-nevir-nfs-lr5e-07-em0.5-s52
+actor_rollout_ref:
+  model:
+    path: /fnwi_fs/ivi/irlab/personal/16207041/verl_checkpoints/golden-nevir-nfs-lr5e-07-em0.5/actor/global_step_52

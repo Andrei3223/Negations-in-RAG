@@ -1,0 +1,10 @@
+# @package _global_
+# Fixed 1,000-question subset of HotpotQA dev (scripts/data_process/make_qa_eval_subsets.py),
+# excluding the 250 questions exp3's training used for validation. Use with a live
+# wiki-18 retriever (eval/retriever=running). Scored with EM / F1; no pairs.
+dataset_id: hotpotqa-dev-1k
+data:
+  train_files: data/qa_eval/hotpotqa_dev_1k.parquet
+  val_files: data/qa_eval/hotpotqa_dev_1k.parquet
+  train_data_num: null
+  val_data_num: null

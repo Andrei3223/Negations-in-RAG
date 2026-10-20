@@ -270,9 +270,53 @@ class DenseRetriever(BaseRetriever):
         else:
             return results
 
+class SpladeRetriever(BaseRetriever):
+    """SPLADE (e.g. naver/splade-v3) over an index from splade_index_builder.py: sparse
+    passage vectors as CSR shards on every visible GPU, exact top-k (splade.py).
+    index_path is the index directory; rows are corpus rows in load_corpus order."""
+
+    def __init__(self, config):
+        super().__init__(config)
+        from splade import SparseIndex, SpladeModel
+        self.index = SparseIndex(self.index_path)
+        meta = self.index.meta
+        if os.path.basename(os.path.normpath(meta["model"])) != os.path.basename(os.path.normpath(config.retrieval_model_path)):
+            warnings.warn(f"index built with {meta['model']}, queries encoded with "
+                          f"{config.retrieval_model_path}")
+        self.corpus = load_corpus(self.corpus_path)
+        assert len(self.corpus) == self.index.n_docs, \
+            f"corpus has {len(self.corpus)} rows, index {self.index.n_docs}: built from another corpus?"
+        self.encoder = SpladeModel(config.retrieval_model_path, "cuda",
+                                   max_length=config.retrieval_query_max_length)
+        self.batch_size = config.retrieval_batch_size
+
+    def _search(self, query: str, num: int = None, return_score: bool = False):
+        results, scores = self._batch_search([query], num, True)
+        return (results[0], scores[0]) if return_score else results[0]
+
+    def _batch_search(self, query_list: List[str], num: int = None, return_score: bool = False):
+        if isinstance(query_list, str):
+            query_list = [query_list]
+        if num is None:
+            num = self.topk
+        results, scores = [], []
+        for start_idx in range(0, len(query_list), self.batch_size):
+            q = self.encoder.encode(query_list[start_idx:start_idx + self.batch_size])
+            batch_scores, batch_idxs = self.index.search(q, num)
+            for row_scores, row_idxs in zip(batch_scores.tolist(), batch_idxs.tolist()):
+                results.append(load_docs(self.corpus, row_idxs))
+                scores.append(row_scores)
+        if return_score:
+            return results, scores
+        else:
+            return results
+
+
 def get_retriever(config):
     if config.retrieval_method == "bm25":
         return BM25Retriever(config)
+    elif config.retrieval_method == "splade":
+        return SpladeRetriever(config)
     else:
         return DenseRetriever(config)
 

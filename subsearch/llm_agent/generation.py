@@ -21,9 +21,14 @@ class GenerationConfig:
     no_think_rl: bool=False
     search_url: str = None
     topk: int = 3
-    # 'live' queries search_url; 'golden' / 'golden_hn' answer every <search> with
-    # the row's gold doc (+ hard negative) passed to run_llm_loop as golden_docs.
+    # 'live' queries search_url; 'golden' / 'golden_hn' / 'golden_rn' / 'golden_hn_rn'
+    # answer every <search> with the row's gold doc (+ hard and/or random negative)
+    # passed to run_llm_loop as golden_docs.
     retriever_mode: str = 'live'
+    # Golden modes only: a row with an empty gold_doc is searched live instead of
+    # raising, so one batch can mix golden negation rows with live NQ/HotpotQA rows.
+    # Off by default so a golden eval on a wrongly built parquet still fails loudly.
+    live_fallback: bool = False
     # Copies of the gold doc shown in 'golden' mode. One copy makes SearchR1
     # (trained with topk=3) treat the block as unfinished and write fake docs.
     golden_copies: int = 2
@@ -282,7 +287,9 @@ class LLMGenerationManager:
                     f"retriever_mode={self.config.retriever_mode!r} needs one golden record per row; "
                     f"got {None if golden_docs is None else len(golden_docs)} for batch of {batch_size}. "
                     "Is data.val_files a *_docs.parquet build?")
-            golden_ctx = [self._golden_passages(rec) for rec in golden_docs]
+            golden_ctx = [None if self.config.live_fallback and not (rec.get('gold') or '').strip()
+                          else self._golden_passages(rec)
+                          for rec in golden_docs]
             self.multi_subquery_searches = 0
             self.total_searches = 0
 
@@ -471,33 +478,37 @@ class LLMGenerationManager:
         next_obs, dones, valid_action, is_search = [], [], [], []
         use_golden = do_search and golden_ctx is not None
 
-        # Flatten subqueries for batch_search
+        def is_golden(i):
+            # golden_ctx[i] is None only for live_fallback rows (no gold_doc).
+            return use_golden and golden_ctx[i] is not None
+
+        # Flatten subqueries of the live search rows for batch_search
         search_queries = []
         search_indices = []
-        if not use_golden:
+        if do_search:
             for idx, (action, content) in enumerate(zip(cur_actions, contents)):
-                if action == 'search':
+                if action == 'search' and not is_golden(idx):
                     for subquery in content:
                         search_queries.append(subquery)
                         search_indices.append(idx)
 
-        if use_golden:
-            # Same shape as the live list below -- compacted, ascending row order --
-            # so the pop(0) consumption and the final assert hold unchanged. i is the
-            # original batch row: predictions stay full-batch via _example_level_pad.
-            search_results = [golden_ctx[i] for i in range(len(cur_actions)) if cur_actions[i] == 'search']
-            n_multi = sum(1 for a, c in zip(cur_actions, contents) if a == 'search' and len(c) > 1)
-            self.total_searches = getattr(self, 'total_searches', 0) + len(search_results)
-            self.multi_subquery_searches = getattr(self, 'multi_subquery_searches', 0) + n_multi
-        elif do_search:
-            search_results_flat = self.batch_search(search_queries)
-            # Group results by original prediction
+        if do_search:
             from collections import defaultdict
             grouped_results = defaultdict(list)
-            for idx, result in zip(search_indices, search_results_flat):
-                grouped_results[idx].append(result)
-            # Join docs for each prediction with ' ## '
-            search_results = [' ## '.join(grouped_results[i]) for i in range(len(cur_actions)) if cur_actions[i] == 'search']
+            if search_queries:
+                for idx, result in zip(search_indices, self.batch_search(search_queries)):
+                    grouped_results[idx].append(result)
+            # Compacted, ascending row order, so the pop(0) consumption below and the
+            # final assert hold. i is the original batch row: predictions stay
+            # full-batch via _example_level_pad. Golden rows get their fixed doc set;
+            # live rows join their subqueries' docs with ' ## '.
+            search_results = [golden_ctx[i] if is_golden(i) else ' ## '.join(grouped_results[i])
+                              for i in range(len(cur_actions)) if cur_actions[i] == 'search']
+            if use_golden:
+                golden_rows = [i for i in range(len(cur_actions)) if cur_actions[i] == 'search' and is_golden(i)]
+                n_multi = sum(1 for i in golden_rows if len(contents[i]) > 1)
+                self.total_searches = getattr(self, 'total_searches', 0) + len(golden_rows)
+                self.multi_subquery_searches = getattr(self, 'multi_subquery_searches', 0) + n_multi
         else:
             search_results = [''] * sum([1 for action in cur_actions if action == 'search'])
 
@@ -651,6 +662,19 @@ class LLMGenerationManager:
             if not other.strip():
                 raise ValueError(f"retriever_mode={self.config.retriever_mode!r} but {col} is empty: {rec!r}")
             docs = [gold, other] if order == 'gold,neg' else [other, gold]
+        elif self.config.retriever_mode == 'golden_hn_rn':
+            # Three docs, matching the topk=3 the Search-R1 checkpoint was trained with:
+            # gold, the pair's other half, and an unrelated doc, in the row's fixed order.
+            order3 = rec.get('order3') or ''
+            by_slot = {'gold': gold, 'neg': neg, 'rand': rand}
+            slots = order3.split(',')
+            if sorted(slots) != ['gold', 'neg', 'rand']:
+                raise ValueError(f"retriever_mode='golden_hn_rn' needs doc_order3 (rebuild with "
+                                 f"negations_golden_docs.py): {rec!r}")
+            for col, text in (('hard_neg_doc', neg), ('rand_neg_doc', rand)):
+                if not text.strip():
+                    raise ValueError(f"retriever_mode='golden_hn_rn' but {col} is empty: {rec!r}")
+            docs = [by_slot[k] for k in slots]
         else:
             raise ValueError(f"unknown retriever_mode {self.config.retriever_mode!r}")
         return self._passages2string([{'document': {'contents': c}} for c in docs])

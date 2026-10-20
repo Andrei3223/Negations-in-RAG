@@ -1,0 +1,14 @@
+# @package _global_
+# Fine-tuned e5 (e5-negft-lam0.3-neg2, best checkpoint = step 260 by val pairwise acc;
+# trained on NevIR + negations-free-sentence train, passage encoder NOT frozen) over the
+# custom doc1/doc2 corpus re-encoded with it (data/custom_index_negft, built by
+# run/build_index.job). top-2. Compare with eval/retriever=custom_2 (stock e5).
+retriever:
+  topk: 2
+  repeat_docs: 1
+
+retriever_server:
+  index_path: data/custom_index_negft/e5_Flat.index
+  corpus_path: data/custom_index/corpus.jsonl
+  model_path: /fnwi_fs/ivi/irlab/personal/16207041/retriever_checkpoints/e5-negft-lam0.3-neg2/20261005-003334/best
+  name: e5

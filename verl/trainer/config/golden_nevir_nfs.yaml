@@ -1,0 +1,56 @@
+# Golden-document finetune, setup 1: NevIR + negations-free-sentence, no retrieval.
+#
+#   sbatch --time=2-00:00:00 --export=ALL,CONFIG_NAME=golden_nevir_nfs,NO_RETRIEVER=1 run/train.job
+#
+# WHY: live e5 retrieval hardly separates a negated query from its positive twin, so
+# negation finetunes with retrieval learned nothing about negation. Here every
+# <search> returns the row's gold document, the pair's other document (hard negative)
+# and an unrelated one, in a fixed per-row order (doc_order3): the model has to read
+# the negation to pick the right document. No retriever job is needed.
+#
+# DATA: python scripts/data_process/build_golden_training.py --setup nevir_nfs
+#   train 1,782 rows (891 pairs), val 352 rows (176 pairs); all golden.
+#   SubSearch prompt: data/golden_nevir_nfs_decomposed (override data.* and model.path).
+#
+# Otherwise matches searchr1_negation_ft (Search-R1 checkpoint, lr 5e-7, batch 128,
+# topk 3, KL 0.001). The training reward is 0.5*EM + 0.5*token F1 here (the negation
+# answers are LLM-written, ~75% not verbatim in the document, so pure EM is sparse);
+# validation stays plain EM, with F1 logged as val/test_f1.
+#
+# STEPS: sized in epochs, not a fixed 150. Earlier negation runs did ~11 epochs; train
+# reward peaked near 125 steps and SubSearch collapsed after ~8 epochs. Here 4 epochs =
+# 52 steps, validated each epoch; saves at 26 and 52. Extend a finished run with
+#   EXTRA_OVERRIDES="+trainer.resume_from_checkpoint=auto trainer.total_training_steps=N"
+# Declares its own data / model / retriever keys: train_grpo.sh reads only this file
+# to decide what it may override and whether NO_RETRIEVER=1 is safe.
+
+defaults:
+  - searchr1_negation_ft
+  - _self_
+
+data:
+  train_files: /home/16207041/Negations-in-RAG/data/golden_nevir_nfs/train.parquet
+  val_files: /home/16207041/Negations-in-RAG/data/golden_nevir_nfs/val.parquet
+  train_batch_size: 128   # 1782/128 = 13 batches/epoch
+  val_batch_size: 352     # the whole val set in one batch
+  val_drop_last: false    # score every row: a dropped tail would cut pairs in half
+
+actor_rollout_ref:
+  model:
+    path: /home/16207041/Negations-in-RAG/checkpoints/SearchR1-nq_hotpotqa_train-qwen2.5-3b-em-grpo
+
+reward_model:
+  answer_em_weight: 0.5   # training answer score = 0.5*EM + 0.5*F1
+
+retriever:
+  mode: golden_hn_rn   # gold + hard negative + random, in the row's doc_order3
+  live_fallback: false # every row is golden; a row without docs is a build error
+  topk: 3
+
+trainer:
+  project_name: SearchR1-golden
+  experiment_name: golden-nevir-nfs-lr${actor_rollout_ref.actor.optim.lr}-em${reward_model.answer_em_weight}
+  total_training_steps: 52   # 13 batches/epoch x 4 epochs
+  total_epochs: 100          # let the step limit bind
+  test_freq: 13              # every epoch (+ step 0 and a final pass)
+  save_freq: 26              # 36 GB each; divides 52 so the last step is saved

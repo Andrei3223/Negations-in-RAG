@@ -68,12 +68,18 @@ def _validate_data_sources(config):
     print(f"[preflight] all data_source values are scoreable ({len(known)} configured)")
 
 
-def _select_rm_score_fn(data_source, reward_cfg, use_answerability=True):
+def _select_rm_score_fn(data_source, reward_cfg, use_answerability=True, validation=False):
     """Build the scoring function for `data_source` from the reward_model config.
 
     Every value comes from config now; the defaults in ppo_trainer.yaml are the
     ones this function previously hardcoded, so behaviour is unchanged.
+
+    validation=True pins the answer score to plain EM (em_weight 1.0) whatever
+    reward_model.answer_em_weight says: val/test_score and the paired negation
+    metrics count a row correct only at the full score, and stay comparable
+    across runs. F1 is logged separately (val/test_f1).
     """
+    em_weight = 1.0 if validation else float(reward_cfg.get('answer_em_weight', 1.0))
     if data_source not in reward_cfg.data_sources:
         raise NotImplementedError(
             f"No reward function for data_source={data_source!r}. "
@@ -115,6 +121,7 @@ def _select_rm_score_fn(data_source, reward_cfg, use_answerability=True):
             decomp_coeff_identical_to_parent=reward_cfg.decomposition.coeff_identical_to_parent,
             decomp_coeff_coverage=reward_cfg.decomposition.coeff_coverage,
             decomp_coeff_disimilar=reward_cfg.decomposition.coeff_dissimilar,
+            em_weight=em_weight,
         )
 
     # Validation path: plain EM, deliberately without format shaping, so val
@@ -125,6 +132,7 @@ def _select_rm_score_fn(data_source, reward_cfg, use_answerability=True):
         score=reward_cfg.score,
         add_format=reward_cfg.val_add_format,
         log_sample_rate=reward_cfg.log_sample_rate,
+        em_weight=em_weight,
     )
 
 
@@ -133,8 +141,10 @@ class RewardManager():
     """
 
     def __init__(self, tokenizer, num_examine, reward_cfg, format_score=0., use_answerability=True,
-                 score_fn=None) -> None:
+                 score_fn=None, validation=False) -> None:
         self.tokenizer = tokenizer
+        # Validation scorer: answer score is plain EM (see _select_rm_score_fn).
+        self.validation = validation
         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
         self.format_score = format_score
         self.use_answerability = use_answerability
@@ -184,7 +194,8 @@ class RewardManager():
             else:
                 compute_score_fn = _select_rm_score_fn(data_source,
                                                        self.reward_cfg,
-                                                       use_answerability=self.use_answerability)
+                                                       use_answerability=self.use_answerability,
+                                                       validation=self.validation)
 
             # Set sample ID for logging
             rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
@@ -392,7 +403,8 @@ def main_task(config):
                                   num_examine=reward_cfg.val_num_examine,
                                   reward_cfg=reward_cfg,
                                   format_score=reward_cfg.format_score,
-                                  use_answerability=reward_cfg.val_use_answerability)
+                                  use_answerability=reward_cfg.val_use_answerability,
+                                  validation=True)
 
     # Token F1 on the same validation rollouts -- a second scoring pass over sequences
     # already generated, so it costs a re-decode, not another rollout.

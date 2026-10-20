@@ -453,10 +453,16 @@ class RayPPOTrainer(object):
         if 'gold_doc' not in ntb:
             return None
         n = len(ntb['gold_doc'])
-        neg = ntb.get('hard_neg_doc', [''] * n)
-        rand = ntb.get('rand_neg_doc', [''] * n)
-        order = ntb.get('doc_order', ['gold,neg'] * n)
-        return [{'gold': ntb['gold_doc'][i], 'neg': neg[i], 'rand': rand[i], 'order': order[i]}
+
+        def col(name, default):
+            # Mixed training files hold '' (or NaN/None after a concat) for rows that
+            # have no golden docs, e.g. NQ/HotpotQA searched live via live_fallback.
+            vals = ntb.get(name, [default] * n)
+            return [v if isinstance(v, str) else default for v in vals]
+
+        gold, neg, rand = col('gold_doc', ''), col('hard_neg_doc', ''), col('rand_neg_doc', '')
+        order, order3 = col('doc_order', 'gold,neg'), col('doc_order3', '')
+        return [{'gold': gold[i], 'neg': neg[i], 'rand': rand[i], 'order': order[i], 'order3': order3[i]}
                 for i in range(n)]
 
     def _validate(self):
@@ -482,6 +488,7 @@ class RayPPOTrainer(object):
             search_url = self.config.retriever.url,
             topk = self.config.retriever.topk,
             retriever_mode = self.config.retriever.get('mode', 'live'),
+            live_fallback = self.config.retriever.get('live_fallback', False),
             golden_copies = self.config.retriever.get('golden_copies', 2),
             repeat_docs = self.config.retriever.get('repeat_docs', 1),
         )
@@ -787,6 +794,7 @@ class RayPPOTrainer(object):
             search_url = self.config.retriever.url,
             topk = self.config.retriever.topk,
             retriever_mode = self.config.retriever.get('mode', 'live'),
+            live_fallback = self.config.retriever.get('live_fallback', False),
             golden_copies = self.config.retriever.get('golden_copies', 2),
             repeat_docs = self.config.retriever.get('repeat_docs', 1),
         )
