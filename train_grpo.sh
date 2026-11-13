@@ -17,6 +17,15 @@ set -euo pipefail
 # 1. Retriever endpoint, published by retrieval_launch.sh. Accepts either a full
 #    "http://host:port" (current format) or a bare IP (older files), so an
 #    endpoint file left over from a previous cluster still resolves.
+#
+#    NO_RETRIEVER=1 (golden-document configs): no endpoint at all. The URL is set
+#    to a closed port, so a live search that should not happen fails at once
+#    instead of silently reaching some other job's retriever. Checked against the
+#    config in step 4 below.
+if [ "${NO_RETRIEVER:-0}" = "1" ]; then
+    RETRIEVER_BASE="http://127.0.0.1:9"
+    echo "NO_RETRIEVER=1: no retriever; live searches would fail at $RETRIEVER_BASE"
+else
 IP_FILE="${RETRIEVER_IP_PATH:?set RETRIEVER_IP_PATH}"
 if [ ! -f "$IP_FILE" ]; then
     echo "ERROR: Retriever endpoint file not found at $IP_FILE"
@@ -29,6 +38,7 @@ case "$RETRIEVER_BASE" in
     *) RETRIEVER_BASE="http://${RETRIEVER_BASE}:${RETRIEVER_PORT:-8000}" ;;
 esac
 echo "Connecting to Retriever at: $RETRIEVER_BASE"
+fi
 
 # 2. Caches on shared storage, not the home quota. run/env.sh sets these; the
 #    defaults keep the script runnable on its own.
@@ -109,6 +119,20 @@ sys.exit(0 if {'train_files': 'train_files' in data,
                'model_path':  'path'        in model}[sys.argv[2]] else 1)
 PY
 }
+
+# NO_RETRIEVER=1 is only safe when the config never searches live: a golden mode
+# without live_fallback. Refuse otherwise rather than crash at the first search.
+if [ "${NO_RETRIEVER:-0}" = "1" ]; then
+    python3 - "$CONFIG_FILE" <<'PY' || exit 1
+import sys, yaml
+r = (yaml.safe_load(open(sys.argv[1])) or {}).get('retriever') or {}
+mode, fallback = r.get('mode', 'live'), r.get('live_fallback', False)
+if mode == 'live' or fallback:
+    sys.exit(f"ERROR: NO_RETRIEVER=1 but {sys.argv[1]} has retriever.mode={mode}, "
+             f"live_fallback={fallback}: it searches live. Start run/retrieval.job instead.")
+print(f"config: retriever.mode={mode}, no live fallback -- running without a retriever")
+PY
+fi
 
 launch_args=()
 if owns train_files; then

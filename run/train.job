@@ -58,6 +58,12 @@ echo "node=$(hostname)  job=${SLURM_JOB_ID:-none}  gpus=${CUDA_VISIBLE_DEVICES:-
 # Index load takes ~15-30 min, so allow an hour. Probing /retrieve rather than
 # just checking the file catches a retriever that published its endpoint and
 # then died during index load.
+#
+# NO_RETRIEVER=1 skips all of this, for golden-document configs that never search
+# live (golden_nevir_nfs, golden_nevir_nfwa); train_grpo.sh checks the config agrees.
+if [ "${NO_RETRIEVER:-0}" = "1" ]; then
+    echo "NO_RETRIEVER=1: not waiting for a retriever"
+else
 echo "Waiting for retriever advertised in $RETRIEVER_IP_PATH (up to 60 min)..."
 retriever_url=""
 for i in $(seq 1 720); do
@@ -95,6 +101,7 @@ if [ -z "$retriever_url" ]; then
     echo "  Endpoint file: $RETRIEVER_IP_PATH"
     exit 1
 fi
+fi  # NO_RETRIEVER
 
 # --- Train ---------------------------------------------------------------------
 exec bash train_grpo.sh
