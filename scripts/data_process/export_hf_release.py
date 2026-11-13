@@ -33,7 +33,7 @@ import string
 import pandas as pd
 
 BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-RAW = '/home/16207041/data'
+RAW = os.environ.get('RAW_DATA_DIR', '/home/16207041/data')
 RAG = os.path.join(BASE, 'data', 'negations_with_answer_rag')
 OUT = os.path.join(BASE, 'data', 'hf_release')
 SPLITS = ['train', 'validation', 'test']

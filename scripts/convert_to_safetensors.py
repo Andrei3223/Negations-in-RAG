@@ -8,7 +8,7 @@ SPLADE++) publish only .bin, so convert once in the `searchr1` env (transformers
 
     conda activate searchr1 && source run/env.sh
     python scripts/convert_to_safetensors.py naver/splade-v3 \
-        /fnwi_fs/ivi/irlab/personal/16207041/models/splade-v3
+        $STORE_ROOT/models/splade-v3
 """
 import sys
 

@@ -42,8 +42,8 @@ fi
 
 # 2. Caches on shared storage, not the home quota. run/env.sh sets these; the
 #    defaults keep the script runnable on its own.
-export HF_HOME="${HF_HOME:-/fnwi_fs/ivi/irlab/personal/$USER/hf_cache}"
-export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-/fnwi_fs/ivi/irlab/personal/$USER/triton_cache}"
+export HF_HOME="${HF_HOME:-${STORE_ROOT:-/fnwi_fs/ivi/irlab/personal/$USER}/hf_cache}"
+export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${STORE_ROOT:-/fnwi_fs/ivi/irlab/personal/$USER}/triton_cache}"
 export PYTHONUNBUFFERED=1
 mkdir -p "$HF_HOME" "$TRITON_CACHE_DIR"
 

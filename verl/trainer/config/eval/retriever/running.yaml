@@ -9,7 +9,7 @@ retriever:
 retriever_server:
   use_running: true
   url: null
-  url_file: ${oc.env:RETRIEVER_IP_PATH,/home/16207041/Negations-in-RAG/retriever_url.txt}
+  url_file: ${oc.env:RETRIEVER_IP_PATH,'${oc.env:REPO_ROOT,/home/16207041/Negations-in-RAG}/retriever_url.txt'}
   # Keep retrying this long, so eval jobs can be queued behind a retrieval.job that
   # is still loading its index (sbatch --dependency=after:<retrieval job>).
   wait_minutes: 90

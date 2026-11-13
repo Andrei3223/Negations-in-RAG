@@ -15,12 +15,14 @@ Outputs (chat-format parquets, 2 records per pair):
   data/negations_with_answer_rag/nevir-with-answers/{split}_clean.parquet
 
 Usage:
-  cd /home/16207041/Negations-in-RAG
+  cd $REPO_ROOT
   python3 scripts/data_process/create_clean2.py
 """
 
 import os
 import pandas as pd
+
+RAW_DATA_DIR = os.environ.get('RAW_DATA_DIR', '/home/16207041/data')  # raw negation datasets
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RAG_DIR = os.path.join(BASE_DIR, 'data', 'negations_with_answer_rag')
@@ -33,7 +35,7 @@ NONE_LIKE = {
 
 DATASETS = {
     'negations-free-with-answer': {
-        'source_dir': '/home/16207041/data/negations_free_with_answer',
+        'source_dir': os.path.join(RAW_DATA_DIR, 'negations_free_with_answer'),
         'source_ext': 'csv',
         'pair_id_col': None,
         'negation_col': 'negation',
@@ -41,7 +43,7 @@ DATASETS = {
         'out_suffix': '_clean2',
     },
     'negation-controlled-with-answers': {
-        'source_dir': '/home/16207041/data/negation_controlled_with_answers',
+        'source_dir': os.path.join(RAW_DATA_DIR, 'negation_controlled_with_answers'),
         'source_ext': 'csv',
         'pair_id_col': None,
         'negation_col': 'negation',
@@ -49,7 +51,7 @@ DATASETS = {
         'out_suffix': '_clean2',
     },
     'nevir-with-answers': {
-        'source_dir': '/home/16207041/data/nevir_with_answers',
+        'source_dir': os.path.join(RAW_DATA_DIR, 'nevir_with_answers'),
         'source_ext': 'parquet',
         'pair_id_col': 'id',
         'negation_col': None,

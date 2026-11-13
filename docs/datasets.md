@@ -159,7 +159,7 @@ The sentence files are a strict subset of the negations-free files in every spli
 
 | corpus | contents | used by |
 |---|---|---|
-| wiki-18 (`/fnwi_fs/ivi/irlab/projects/chatr1/collection`) | 21M Wikipedia passages, e5 FAISS index (60 GB) | `eval/retriever=wiki`, `running` |
+| wiki-18 (`$RETRIEVAL_DATA`, default `/fnwi_fs/ivi/irlab/projects/chatr1/collection`) | 21M Wikipedia passages, e5 FAISS index (60 GB) | `eval/retriever=wiki`, `running` |
 | `data/custom_index/` | 3,346 documents: doc1/doc2 of negations-free-sentence and NevIR (all splits), e5 index | `eval/retriever=custom`, `custom_2`, `custom_x2` |
 
 The custom corpus holds the gold document for **100%** of sentence and NevIR test rows but only
@@ -178,7 +178,7 @@ The custom corpus holds the gold document for **100%** of sentence and NevIR tes
 | `multihop_search/` | NQ, HotpotQA, MuSiQue, 2Wiki, PopQA, TriviaQA, … with the Search-R1 prompt |
 | `negation_rag/gpt4o-negation-controlled/` | older framing: both documents in the prompt, answer is "document 1" / "document 2" |
 
-Raw sources and intermediate files live outside the repo in `/home/16207041/data/`.
+Raw sources and intermediate files live outside the repo in `$RAW_DATA_DIR` (default `/home/16207041/data/`).
 
 ### Golden-document training sets
 

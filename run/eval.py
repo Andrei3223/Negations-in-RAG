@@ -1,3 +1,4 @@
+import os
 import socket
 import subprocess
 import signal
@@ -20,7 +21,9 @@ def _free_port() -> int:
 
 
 def _start_server(rs, port: int) -> subprocess.Popen:
-    retriever_python = "/home/16207041/miniconda3/envs/retriever/bin/python"
+    # The retriever has its own conda env (faiss-gpu); RETRIEVER_PYTHON or CONDA_DIR override it.
+    retriever_python = os.environ.get("RETRIEVER_PYTHON") or os.path.join(
+        os.environ.get("CONDA_DIR", "/home/16207041/miniconda3"), "envs/retriever/bin/python")
     return subprocess.Popen(
         [retriever_python, "-u", "subsearch/search/retrieval_server.py",
          "--index_path",      rs.index_path,

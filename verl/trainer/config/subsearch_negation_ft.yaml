@@ -26,7 +26,7 @@ defaults:
   - _self_
 
 data:
-  train_files: /home/16207041/Negations-in-RAG/data/negation_only_decomposed/train.parquet
+  train_files: ${oc.env:REPO_ROOT,/home/16207041/Negations-in-RAG}/data/negation_only_decomposed/train.parquet
 
   # The COMBINED val, not negation_only_decomposed/val.parquet, for two reasons.
   #
@@ -42,7 +42,7 @@ data:
   #
   # Must be the _decomposed build: the non-decomposed one is the BASE template, and a
   # val whose prompt differs from training would make the numbers meaningless.
-  val_files: /home/16207041/Negations-in-RAG/data/combined_nq_hotpot_nevir_negfree_upsampled_decomposed/val.parquet
+  val_files: ${oc.env:REPO_ROOT,/home/16207041/Negations-in-RAG}/data/combined_nq_hotpot_nevir_negfree_upsampled_decomposed/val.parquet
 
   # 512 would give floor(1782/512) = 3 batches per epoch. 128 gives 13, which is what
   # makes 150 steps reachable without an absurd epoch count (see total_epochs).
@@ -62,7 +62,7 @@ actor_rollout_ref:
     # the LR scheduler position, a non-zero global_steps and the reward adaptive-beta
     # EMA. This directory has none of those, and a finetune on new data wants a fresh
     # optimizer, a fresh schedule and a step counter at 0 anyway.
-    path: /home/16207041/Negations-in-RAG/checkpoints/SubSearch-qwen2.5-3b-grpo
+    path: ${oc.env:REPO_ROOT,/home/16207041/Negations-in-RAG}/checkpoints/SubSearch-qwen2.5-3b-grpo
   actor:
     optim:
       # Half the 1e-6 used to train from base. The starting policy is already RL-trained;

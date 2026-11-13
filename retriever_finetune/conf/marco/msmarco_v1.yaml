@@ -20,7 +20,7 @@ loss_weight: 1.0        # L = PL(negation rows) + loss_weight * InfoNCE(MARCO ro
 hard_negatives: 1       # the triple's BM25 negative per MARCO query; 0 = in-batch only
 
 # Build (prepare_marco.py)
-source_dir: /fnwi_fs/ivi/irlab/projects/SCAI_QRECC/msmarco
+source_dir: ${oc.env:MSMARCO_DIR,/fnwi_fs/ivi/irlab/projects/SCAI_QRECC/msmarco}
 num_train: 1782         # = negation train queries (891 pairs x 2), so batches mix 1:1
 val_negs_per_query: 20  # BM25 negatives kept per val query (of ~1,085 in train-eval)
 seed: 42

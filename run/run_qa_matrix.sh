@@ -16,7 +16,10 @@
 #
 # Env: MODELS="searchr1 exp1 exp2 exp3"  REPS=3  DRYRUN=0  RETRIEVER=stock|negft
 set -euo pipefail
-cd /home/16207041/Negations-in-RAG
+REPO_ROOT=${REPO_ROOT:-/home/16207041/Negations-in-RAG}
+STORE_ROOT=${STORE_ROOT:-/fnwi_fs/ivi/irlab/personal/16207041}          # checkpoints, models, indexes
+RETRIEVAL_DATA=${RETRIEVAL_DATA:-/fnwi_fs/ivi/irlab/projects/chatr1/collection}  # wiki-18 corpus + e5 index
+cd "$REPO_ROOT"
 
 MODELS=(${MODELS:-searchr1 exp1 exp2 exp3})
 REPS=${REPS:-3}
@@ -28,10 +31,10 @@ case "$RETRIEVER" in
   stock)  # stock e5 over the standard wiki-18 index, publishing to retriever_url.txt
     RETR_NAME=subsearch-retriever; RETR_ARGS=(); RETR_CFG=running; COND=wiki; SUFFIX="" ;;
   negft)  # same paths as run/run_negft_eval.sh; publishes to retriever_url_negft.txt
-    CKPT=/fnwi_fs/ivi/irlab/personal/16207041/retriever_checkpoints/e5-negft-lam0.3-neg2/20261005-003334/best
-    WIKI_INDEX=/fnwi_fs/ivi/irlab/personal/16207041/indexes/wiki18_e5-negft-lam0.3-neg2/e5_Flat.index
-    WIKI_CORPUS=/fnwi_fs/ivi/irlab/projects/chatr1/collection/wiki-18.jsonl
-    URL_FILE=/home/16207041/Negations-in-RAG/retriever_url_negft.txt
+    CKPT=$STORE_ROOT/retriever_checkpoints/e5-negft-lam0.3-neg2/20261005-003334/best
+    WIKI_INDEX=$STORE_ROOT/indexes/wiki18_e5-negft-lam0.3-neg2/e5_Flat.index
+    WIKI_CORPUS=$RETRIEVAL_DATA/wiki-18.jsonl
+    URL_FILE=$REPO_ROOT/retriever_url_negft.txt
     [ -r "$WIKI_INDEX" ] || { echo "missing $WIKI_INDEX (build it with run/run_negft_eval.sh)"; exit 1; }
     RETR_NAME=negft-qa-retriever
     RETR_ARGS=(--export=ALL,RETRIEVER_MODEL="$CKPT",RETRIEVER_INDEX="$WIKI_INDEX",RETRIEVER_CORPUS="$WIKI_CORPUS",RETRIEVER_IP_PATH="$URL_FILE")
@@ -44,7 +47,7 @@ declare -A DATASET=([nq]=nq_1k [hotpotqa]=hotpotqa_1k)
 # multi-hop and takes more search turns per question.
 declare -A TIME=([nq]=05:00:00 [hotpotqa]=07:00:00)
 
-mkdir -p eval_logs/slurm
+mkdir -p eval_logs/slurm logs
 MANIFEST=eval_logs/run_manifest_qa${SUFFIX}_$(date +%Y%m%d-%H%M%S).csv
 [ "$DRYRUN" = "1" ] && MANIFEST=/dev/null
 echo "timestamp,model,dataset,condition,job_id,job_name" > "$MANIFEST"

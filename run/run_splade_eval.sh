@@ -39,7 +39,10 @@
 # Env: SPLADE_RUN=base|ft|ftneg  MODELS="searchr1 exp1"  REPS=3  DRYRUN=0  SKIP_BUILD=0
 #      EVALS="nfs:custom_2 nfs:custom_x2 nevir:custom_2 nevir:custom_x2 hotpotqa:wiki"
 set -euo pipefail
-cd /home/16207041/Negations-in-RAG
+REPO_ROOT=${REPO_ROOT:-/home/16207041/Negations-in-RAG}
+STORE_ROOT=${STORE_ROOT:-/fnwi_fs/ivi/irlab/personal/16207041}          # checkpoints, models, indexes
+RETRIEVAL_DATA=${RETRIEVAL_DATA:-/fnwi_fs/ivi/irlab/projects/chatr1/collection}  # wiki-18 corpus + e5 index
+cd "$REPO_ROOT"
 
 MODELS=(${MODELS:-searchr1 exp1})
 REPS=${REPS:-3}
@@ -47,33 +50,33 @@ DRYRUN=${DRYRUN:-0}
 SKIP_BUILD=${SKIP_BUILD:-0}
 SUBMIT=run/eval_negations_with_answers.sh
 
-WIKI_CORPUS=/fnwi_fs/ivi/irlab/projects/chatr1/collection/wiki-18.jsonl
+WIKI_CORPUS=$RETRIEVAL_DATA/wiki-18.jsonl
 # SPLADE_RUN picks the retriever; TAG is the condition prefix (eval/retriever=${TAG}_*,
 # whose configs hold the same model and index paths) and names the jobs.
 case "${SPLADE_RUN:-base}" in
   base)  # stock naver/splade-v3 (safetensors copy)
     TAG=splade
-    SPLADE_MODEL=/fnwi_fs/ivi/irlab/personal/16207041/models/splade-v3
+    SPLADE_MODEL=$STORE_ROOT/models/splade-v3
     CUSTOM_INDEX_DIR=data/custom_index_splade_v3
-    WIKI_INDEX_DIR=/fnwi_fs/ivi/irlab/personal/16207041/indexes/wiki18_splade-v3
+    WIKI_INDEX_DIR=$STORE_ROOT/indexes/wiki18_splade-v3
     MAX_TERMS=256 ;;   # ~211 terms per wiki passage: the cap rarely binds
   ft)    # fine-tuned on NevIR + NFS pairs + MS MARCO (lambda_d=0.003, picked by val pair acc)
     TAG=spladeft
-    SPLADE_MODEL=/fnwi_fs/ivi/irlab/personal/16207041/retriever_checkpoints/splade-v3-negft-lam0.3-neg2-marco1782/20261014-140623/best
+    SPLADE_MODEL=$STORE_ROOT/retriever_checkpoints/splade-v3-negft-lam0.3-neg2-marco1782/20261014-140623/best
     CUSTOM_INDEX_DIR=data/custom_index_spladeft
-    WIKI_INDEX_DIR=/fnwi_fs/ivi/irlab/personal/16207041/indexes/wiki18_spladeft-lamd0.003
+    WIKI_INDEX_DIR=$STORE_ROOT/indexes/wiki18_spladeft-lamd0.003
     MAX_TERMS=0 ;;     # no cap: ~334 terms per wiki passage (p99 561), 256 would truncate
   ftneg) # same as ft but negation pairs only (marco=none), like the fine-tuned e5 (negft_*)
     TAG=spladeftneg
-    SPLADE_MODEL=/fnwi_fs/ivi/irlab/personal/16207041/retriever_checkpoints/splade-v3-negft-lam0.3-neg2-nomarco/20261101-190055/best
+    SPLADE_MODEL=$STORE_ROOT/retriever_checkpoints/splade-v3-negft-lam0.3-neg2-nomarco/20261101-190055/best
     CUSTOM_INDEX_DIR=data/custom_index_spladeftneg
-    WIKI_INDEX_DIR=/fnwi_fs/ivi/irlab/personal/16207041/indexes/wiki18_spladeftneg-lamd0.003
+    WIKI_INDEX_DIR=$STORE_ROOT/indexes/wiki18_spladeftneg-lamd0.003
     MAX_TERMS=0 ;;
   *) echo "SPLADE_RUN must be base, ft or ftneg, got '$SPLADE_RUN'"; exit 1 ;;
 esac
 [ -f "$SPLADE_MODEL/model.safetensors" ] || {
   echo "missing $SPLADE_MODEL/model.safetensors (base: run scripts/convert_to_safetensors.py, see the header)"; exit 1; }
-URL_FILE=/home/16207041/Negations-in-RAG/retriever_url_${TAG}.txt
+URL_FILE=$REPO_ROOT/retriever_url_${TAG}.txt
 
 # condition -> datasets it runs on; dataset -> eval config and wall clock (REPS=3)
 declare -A DATASET=([nfs]=negations_free_sentence_with_answer_docs [nevir]=nevir_with_answers_docs

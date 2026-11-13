@@ -16,13 +16,13 @@ defaults:
   - _self_
 
 data:
-  train_files: /home/16207041/Negations-in-RAG/data/golden_nevir_nfwa/train.parquet
-  val_files: /home/16207041/Negations-in-RAG/data/golden_nevir_nfwa/val.parquet
+  train_files: ${oc.env:REPO_ROOT,/home/16207041/Negations-in-RAG}/data/golden_nevir_nfwa/train.parquet
+  val_files: ${oc.env:REPO_ROOT,/home/16207041/Negations-in-RAG}/data/golden_nevir_nfwa/val.parquet
   val_batch_size: 494     # 2880/128 = 22 batches/epoch; val in one batch
 
 actor_rollout_ref:
   model:
-    path: /home/16207041/Negations-in-RAG/checkpoints/SearchR1-nq_hotpotqa_train-qwen2.5-3b-em-grpo
+    path: ${oc.env:REPO_ROOT,/home/16207041/Negations-in-RAG}/checkpoints/SearchR1-nq_hotpotqa_train-qwen2.5-3b-em-grpo
 
 reward_model:
   answer_em_weight: 0.5   # training answer score = 0.5*EM + 0.5*F1

@@ -10,5 +10,5 @@ retriever_server:
   index_path: data/custom_index_splade_v3
   corpus_path: data/custom_index/corpus.jsonl
   # naver/splade-v3 as safetensors (scripts/convert_to_safetensors.py)
-  model_path: /fnwi_fs/ivi/irlab/personal/16207041/models/splade-v3
+  model_path: ${oc.env:STORE_ROOT,/fnwi_fs/ivi/irlab/personal/16207041}/models/splade-v3
   name: splade

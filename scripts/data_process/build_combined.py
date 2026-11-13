@@ -10,7 +10,7 @@ All rows are normalized to the 5 columns the trainer reads:
 extra_info is unified to a single struct so the parquet schema is consistent.
 
 Usage:
-  cd /home/16207041/Negations-in-RAG
+  cd $REPO_ROOT
   python3 scripts/data_process/build_combined.py \
       --out_dir data/combined_nq_hotpot_nevir_negfree \
       --val_qa_cap 500

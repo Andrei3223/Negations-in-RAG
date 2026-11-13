@@ -14,7 +14,7 @@
 # same weights the SPLADE retrieval server loads.
 type: splade
 short_name: splade-v3   # experiment_name prefix
-name_or_path: /fnwi_fs/ivi/irlab/personal/16207041/models/splade-v3
+name_or_path: ${oc.env:STORE_ROOT,/fnwi_fs/ivi/irlab/personal/16207041}/models/splade-v3
 query_max_length: 64
 # Same as the e5 runs and as the custom / wiki-18 SPLADE indexes.
 passage_max_length: 256

@@ -13,5 +13,5 @@ retriever:
 retriever_server:
   index_path: data/custom_index_spladeftneg
   corpus_path: data/custom_index/corpus.jsonl
-  model_path: /fnwi_fs/ivi/irlab/personal/16207041/retriever_checkpoints/splade-v3-negft-lam0.3-neg2-nomarco/20261101-190055/best
+  model_path: ${oc.env:STORE_ROOT,/fnwi_fs/ivi/irlab/personal/16207041}/retriever_checkpoints/splade-v3-negft-lam0.3-neg2-nomarco/20261101-190055/best
   name: splade

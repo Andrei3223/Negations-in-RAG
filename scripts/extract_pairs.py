@@ -3,7 +3,7 @@ Parse evaluation log files and produce a CSV with one row per evaluation record.
 Each row contains: question (from parquet), golden_answers, extracted_answer,
 query_role (q1/q2), pair_id, model, dataset.
 
-Source parquet at /home/16207041/data/ stores one row per PAIR with explicit
+Source parquet in $RAW_DATA_DIR stores one row per PAIR with explicit
 q1/q2/answer1/answer2 columns, so pair_id = row index and role is determined
 by matching the golden answer against answer1 (→ q1) or answer2 (→ q2).
 
@@ -14,6 +14,7 @@ answer (not by the nearby question text in the log).
 
 import ast
 import json
+import os
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -21,7 +22,7 @@ from pathlib import Path
 import pandas as pd
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = Path("/home/16207041/data")
+DATA_DIR = Path(os.environ.get("RAW_DATA_DIR", "/home/16207041/data"))
 
 LOGS = [
     # SearchR1 runs

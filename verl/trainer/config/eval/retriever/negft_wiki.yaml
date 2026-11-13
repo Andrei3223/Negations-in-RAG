@@ -9,6 +9,6 @@ retriever:
 retriever_server:
   use_running: true
   url: null
-  url_file: /home/16207041/Negations-in-RAG/retriever_url_negft.txt
+  url_file: ${oc.env:REPO_ROOT,/home/16207041/Negations-in-RAG}/retriever_url_negft.txt
   # Long: these jobs queue behind a retriever that first loads a fresh 65 GB index.
   wait_minutes: 120

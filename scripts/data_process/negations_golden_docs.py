@@ -66,7 +66,7 @@ NEG = {'q1': 'doc2', 'q2': 'doc1'}
 ANSWER = {'q1': 'answer1', 'q2': 'answer2'}
 
 RAG_DIR = 'data/negations_with_answer_rag'
-SRC_DIR = '/home/16207041/data'
+SRC_DIR = os.environ.get('RAW_DATA_DIR', '/home/16207041/data')
 
 SPLITS = ('train', 'validation', 'test')
 

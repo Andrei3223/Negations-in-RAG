@@ -7,8 +7,9 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --time=12:00:00
-#SBATCH --output=/home/16207041/Negations-in-RAG/logs/%x-%j.out
-#SBATCH --error=/home/16207041/Negations-in-RAG/logs/%x-%j.err
+#SBATCH --output=logs/%x-%j.out
+#SBATCH --error=logs/%x-%j.err
+# Log paths are relative to the submission directory: submit from the repo root.
 #
 # Fine-tune the e5 retriever on NevIR + negations-free-sentence pairs, with an equal
 # number of MS MARCO queries mixed into every batch (InfoNCE) against forgetting.
@@ -34,14 +35,14 @@
 # a 32-pair step with 4 mined docs per query stays far below 48 GB.
 #
 # Output: best/ and last/ (HF format) plus metrics.json under trainer.output_dir
-# (/fnwi_fs/.../retriever_checkpoints/<experiment>/<time>/). Serving one with
+# ($STORE_ROOT/retriever_checkpoints/<experiment>/<time>/). Serving one with
 # retrieval_server.py --retriever_model <dir> --retriever_name e5 needs an index
 # re-encoded with the same model, unless the run used
 # model.freeze_passage_encoder=true (then the existing index stays valid).
 
 set -eo pipefail
 
-cd /home/16207041/Negations-in-RAG
+cd "${REPO_ROOT:-/home/16207041/Negations-in-RAG}"
 source run/env.sh            # HF_HOME (cached e5-base-v2), WANDB_API_KEY from run/.env
 conda activate "$TRAIN_ENV"  # searchr1: torch 2.4, transformers 4.47, hydra 1.3, wandb
 

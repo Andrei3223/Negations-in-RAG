@@ -12,6 +12,6 @@ retriever:
 retriever_server:
   use_running: true
   url: null
-  url_file: /home/16207041/Negations-in-RAG/retriever_url_spladeftneg.txt
+  url_file: ${oc.env:REPO_ROOT,/home/16207041/Negations-in-RAG}/retriever_url_spladeftneg.txt
   # Long: these jobs queue behind a retriever that first loads the sparse shards.
   wait_minutes: 120

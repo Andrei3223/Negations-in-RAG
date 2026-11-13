@@ -42,7 +42,7 @@ trainer:
   marco_monitor: val/marco/pool_ndcg@10
   marco_max_drop: 0.01
   save_checkpoints: true    # best/ and last/ in HF format, loadable by retrieval_server.py
-  output_dir: /fnwi_fs/ivi/irlab/personal/16207041/retriever_checkpoints/${experiment_name}/${now:%Y%m%d-%H%M%S}
+  output_dir: ${oc.env:STORE_ROOT,/fnwi_fs/ivi/irlab/personal/16207041}/retriever_checkpoints/${experiment_name}/${now:%Y%m%d-%H%M%S}
 
 eval:
   # In-batch metrics rank each query's doc against the docs of its own val batch.

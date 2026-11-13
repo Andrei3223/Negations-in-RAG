@@ -29,15 +29,15 @@ defaults:
   - _self_
 
 data:
-  train_files: /home/16207041/Negations-in-RAG/data/golden_nevir_nfs/train.parquet
-  val_files: /home/16207041/Negations-in-RAG/data/golden_nevir_nfs/val.parquet
+  train_files: ${oc.env:REPO_ROOT,/home/16207041/Negations-in-RAG}/data/golden_nevir_nfs/train.parquet
+  val_files: ${oc.env:REPO_ROOT,/home/16207041/Negations-in-RAG}/data/golden_nevir_nfs/val.parquet
   train_batch_size: 128   # 1782/128 = 13 batches/epoch
   val_batch_size: 352     # the whole val set in one batch
   val_drop_last: false    # score every row: a dropped tail would cut pairs in half
 
 actor_rollout_ref:
   model:
-    path: /home/16207041/Negations-in-RAG/checkpoints/SearchR1-nq_hotpotqa_train-qwen2.5-3b-em-grpo
+    path: ${oc.env:REPO_ROOT,/home/16207041/Negations-in-RAG}/checkpoints/SearchR1-nq_hotpotqa_train-qwen2.5-3b-em-grpo
 
 reward_model:
   answer_em_weight: 0.5   # training answer score = 0.5*EM + 0.5*F1

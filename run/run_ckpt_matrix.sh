@@ -28,7 +28,7 @@
 #      (subsets of the matrix; the retriever is only started when CONDS has wiki), e.g.
 #   MODELS=searchr1 DATASETS="nfs nevir" CONDS=wiki bash run/run_ckpt_matrix.sh
 set -euo pipefail
-cd /home/16207041/Negations-in-RAG
+cd "${REPO_ROOT:-/home/16207041/Negations-in-RAG}"
 
 MODELS=(${MODELS:-exp1 exp2 exp3})
 REPS=${REPS:-3}
@@ -46,7 +46,7 @@ declare -A DATASET=(
 declare -A TIME=([nfwa]=05:00:00 [nfs]=03:00:00 [nevir]=08:00:00)
 declare -A TIME_WIKI=([nfwa]=07:00:00 [nfs]=05:00:00 [nevir]=10:00:00)
 
-mkdir -p eval_logs/slurm
+mkdir -p eval_logs/slurm logs
 MANIFEST=eval_logs/run_manifest_ckpt_$(date +%Y%m%d-%H%M%S).csv
 [ "$DRYRUN" = "1" ] && MANIFEST=/dev/null
 echo "timestamp,model,dataset,condition,job_id,job_name" > "$MANIFEST"

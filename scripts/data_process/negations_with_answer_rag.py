@@ -2,9 +2,9 @@
 Preprocess negation QA datasets to parquet format for live-retrieval eval.
 
 Supported datasets (--dataset):
-  negations-free-with-answer        /home/16207041/data/negations_free_with_answer
-  negation-controlled-with-answers  /home/16207041/data/negation_controlled_with_answers
-  nevir-with-answers                /home/16207041/data/nevir_with_answers
+  negations-free-with-answer        $RAW_DATA_DIR/negations_free_with_answer
+  negation-controlled-with-answers  $RAW_DATA_DIR/negation_controlled_with_answers
+  nevir-with-answers                $RAW_DATA_DIR/nevir_with_answers
 
 Schema (all three): q1, q2, answer1, answer2, [negation (int 0-9)], [id]
 
@@ -19,25 +19,27 @@ import os
 import argparse
 import pandas as pd
 
+RAW_DATA_DIR = os.environ.get('RAW_DATA_DIR', '/home/16207041/data')  # raw negation datasets
+
 
 DATASETS = {
     'negations-free-with-answer': {
-        'source_dir': '/home/16207041/data/negations_free_with_answer',
+        'source_dir': os.path.join(RAW_DATA_DIR, 'negations_free_with_answer'),
         'pair_id_col': None,   # use row index
         'negation_col': 'negation',
     },
     'negation-controlled-with-answers': {
-        'source_dir': '/home/16207041/data/negation_controlled_with_answers',
+        'source_dir': os.path.join(RAW_DATA_DIR, 'negation_controlled_with_answers'),
         'pair_id_col': None,
         'negation_col': 'negation',
     },
     'nevir-with-answers': {
-        'source_dir': '/home/16207041/data/nevir_with_answers',
+        'source_dir': os.path.join(RAW_DATA_DIR, 'nevir_with_answers'),
         'pair_id_col': 'id',   # dataset has its own id field
         'negation_col': None,
     },
     'negations-free-sentence-with-answer': {
-        'source_dir': '/home/16207041/data/negations_free_sentence_with_answer',
+        'source_dir': os.path.join(RAW_DATA_DIR, 'negations_free_sentence_with_answer'),
         'pair_id_col': None,
         'negation_col': 'negation',
     },

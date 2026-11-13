@@ -4,4 +4,4 @@
 model_id: golden-nevir-nfwa-nq-hotpot-lr5e-07-em0.5-s134
 actor_rollout_ref:
   model:
-    path: /fnwi_fs/ivi/irlab/personal/16207041/verl_checkpoints/golden-nevir-nfwa-nq-hotpot-lr5e-07-em0.5/actor/global_step_134
+    path: ${oc.env:STORE_ROOT,/fnwi_fs/ivi/irlab/personal/16207041}/verl_checkpoints/golden-nevir-nfwa-nq-hotpot-lr5e-07-em0.5/actor/global_step_134

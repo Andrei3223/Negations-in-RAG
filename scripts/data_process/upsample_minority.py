@@ -8,7 +8,7 @@ Output is written to a NEW directory so the original combined set is untouched.
 val.parquet is copied through unchanged (you evaluate on the real distribution).
 
 Usage:
-  cd /home/16207041/Negations-in-RAG
+  cd $REPO_ROOT
 
   # target a minority fraction (default 0.10 == 10%):
   python3 scripts/data_process/upsample_minority.py --target_frac 0.10

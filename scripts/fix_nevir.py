@@ -8,14 +8,16 @@ Strategy:
 import csv, re, os
 from pathlib import Path
 
+RAW_DATA_DIR = os.environ.get('RAW_DATA_DIR', '/home/16207041/data')  # raw negation datasets
+
 NONE_PAT = re.compile(
     r'not mention|not specif|not stated|not given|\bnone\b|\bn/a\b',
     re.IGNORECASE
 )
 
-OLD_DIR = Path('/home/16207041/data/nevir_with_answer')
-NEW_DIR = Path('/home/16207041/data/nevir_with_answers')
-OUT_DIR = Path('/home/16207041/data/nevir_with_answers_fixed')
+OLD_DIR = Path(RAW_DATA_DIR, 'nevir_with_answer')
+NEW_DIR = Path(RAW_DATA_DIR, 'nevir_with_answers')
+OUT_DIR = Path(RAW_DATA_DIR, 'nevir_with_answers_fixed')
 OUT_DIR.mkdir(exist_ok=True)
 
 log_rows = []   # (split, id, col, old_ans, new_ans, action)

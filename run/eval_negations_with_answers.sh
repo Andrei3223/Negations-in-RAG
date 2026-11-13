@@ -50,9 +50,10 @@
 
 set -e
 
-set -a; source "/home/16207041/Negations-in-RAG/run/.env"; set +a
+export REPO_ROOT="${REPO_ROOT:-/home/16207041/Negations-in-RAG}"
+set -a; [ -f "$REPO_ROOT/run/.env" ] && source "$REPO_ROOT/run/.env"; set +a
 source "${HOME}/.bashrc"
-source /home/16207041/miniconda3/etc/profile.d/conda.sh
+source "${CONDA_DIR:-/home/16207041/miniconda3}/etc/profile.d/conda.sh"
 conda activate searchr1
 
 export CUDA_VISIBLE_DEVICES=0

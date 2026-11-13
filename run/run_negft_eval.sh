@@ -22,7 +22,10 @@
 #
 # Env: MODELS="exp1"  REPS=3  DRYRUN=0  SKIP_BUILD=0
 set -euo pipefail
-cd /home/16207041/Negations-in-RAG
+REPO_ROOT=${REPO_ROOT:-/home/16207041/Negations-in-RAG}
+STORE_ROOT=${STORE_ROOT:-/fnwi_fs/ivi/irlab/personal/16207041}          # checkpoints, models, indexes
+RETRIEVAL_DATA=${RETRIEVAL_DATA:-/fnwi_fs/ivi/irlab/projects/chatr1/collection}  # wiki-18 corpus + e5 index
+cd "$REPO_ROOT"
 
 MODELS=(${MODELS:-exp1})
 REPS=${REPS:-3}
@@ -30,11 +33,11 @@ DRYRUN=${DRYRUN:-0}
 SKIP_BUILD=${SKIP_BUILD:-0}
 SUBMIT=run/eval_negations_with_answers.sh
 
-CKPT=/fnwi_fs/ivi/irlab/personal/16207041/retriever_checkpoints/e5-negft-lam0.3-neg2/20261005-003334/best
+CKPT=$STORE_ROOT/retriever_checkpoints/e5-negft-lam0.3-neg2/20261005-003334/best
 CUSTOM_INDEX_DIR=data/custom_index_negft
-WIKI_INDEX_DIR=/fnwi_fs/ivi/irlab/personal/16207041/indexes/wiki18_e5-negft-lam0.3-neg2
-WIKI_CORPUS=/fnwi_fs/ivi/irlab/projects/chatr1/collection/wiki-18.jsonl
-URL_FILE=/home/16207041/Negations-in-RAG/retriever_url_negft.txt
+WIKI_INDEX_DIR=$STORE_ROOT/indexes/wiki18_e5-negft-lam0.3-neg2
+WIKI_CORPUS=$RETRIEVAL_DATA/wiki-18.jsonl
+URL_FILE=$REPO_ROOT/retriever_url_negft.txt
 
 declare -A DATASET=([nfs]=negations_free_sentence_with_answer_docs [nevir]=nevir_with_answers_docs)
 declare -A TIME=([nfs]=03:00:00 [nevir]=08:00:00)
