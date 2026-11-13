@@ -1,0 +1,49 @@
+#!/bin/bash
+#SBATCH --job-name=build-index
+#SBATCH --partition=gpu
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --output=/home/16207041/Negations-in-RAG/logs/%x-%j.out
+#SBATCH --error=/home/16207041/Negations-in-RAG/logs/%x-%j.err
+#
+# Encode a corpus with an e5-style encoder and write a FAISS Flat (inner-product)
+# index, using subsearch/search/index_builder.py ("passage: " prefix, mean pooling,
+# L2 norm -- the same conventions as retrieval_server.py and retriever_finetune/).
+# Needed whenever the passage encoder changes, e.g. after fine-tuning e5 without
+# freezing it.
+#
+# Env (required): INDEX_MODEL   HF model dir or name
+#                 INDEX_CORPUS  jsonl with a "contents" field ("title"\ntext)
+#                 INDEX_DIR     output directory (gets e5_Flat.index + BUILD_INFO)
+# GPUs, memory and time are set at submission. The builder keeps every embedding in
+# host RAM: the 3,346-doc custom corpus needs a few GB; wiki-18 (21M passages,
+# ~65 GB of fp32 vectors, ~200 GB peak while building the index) needs --mem>=400G.
+#
+#   sbatch --gres=gpu:1 --mem=32G --time=01:00:00 \
+#     --export=ALL,INDEX_MODEL=...,INDEX_CORPUS=...,INDEX_DIR=... run/build_index.job
+set -eo pipefail
+cd /home/16207041/Negations-in-RAG
+source run/env.sh
+conda activate "$RETRIEVER_ENV"
+
+: "${INDEX_MODEL:?set INDEX_MODEL}"
+: "${INDEX_CORPUS:?set INDEX_CORPUS}"
+: "${INDEX_DIR:?set INDEX_DIR}"
+mkdir -p "$INDEX_DIR"
+echo "node=$(hostname) gpus=${CUDA_VISIBLE_DEVICES:-unset} model=$INDEX_MODEL corpus=$INDEX_CORPUS -> $INDEX_DIR"
+
+python subsearch/search/index_builder.py \
+    --retrieval_method e5 \
+    --model_path "$INDEX_MODEL" \
+    --corpus_path "$INDEX_CORPUS" \
+    --save_dir "$INDEX_DIR" \
+    --use_fp16 \
+    --max_length 256 \
+    --batch_size 512 \
+    --pooling_method mean \
+    --faiss_type Flat
+
+printf 'model=%s\ncorpus=%s\nbuilt=%s\njob=%s\n' "$INDEX_MODEL" "$INDEX_CORPUS" "$(date -Is)" "${SLURM_JOB_ID:-local}" \
+    > "$INDEX_DIR/BUILD_INFO"
+ls -la "$INDEX_DIR"

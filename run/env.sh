@@ -45,6 +45,7 @@ export SAVE_DIR_BASE="/fnwi_fs/ivi/irlab/personal/16207041/verl_checkpoints"
 # retriever derives one from its job id and walks forward if it is taken, because
 # a hard-coded 8000 collided with other users' services (job 347161). Export
 # RETRIEVER_PORT yourself only to pin the starting port.
-export RETRIEVER_IP_PATH="$REPO_ROOT/retriever_url.txt"
+# A caller may point a second retriever at its own file (e.g. run/run_negft_eval.sh).
+export RETRIEVER_IP_PATH="${RETRIEVER_IP_PATH:-$REPO_ROOT/retriever_url.txt}"
 
 mkdir -p "$HF_HOME" "$TRITON_CACHE_DIR" "$SAVE_DIR_BASE" "$REPO_ROOT/logs"

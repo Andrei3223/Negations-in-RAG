@@ -18,8 +18,14 @@ set -eo pipefail
 # the starting point.
 RETRIEVER_PORT="${RETRIEVER_PORT:-$(( 20000 + ${SLURM_JOB_ID:-$$} % 12000 ))}"
 
-index_file="$RETRIEVAL_DATA/e5_Flat.index"
-corpus_file="$RETRIEVAL_DATA/wiki-18.jsonl"
+# Overridable to serve another encoder over its own index (e.g. a fine-tuned e5 with
+# a re-encoded wiki-18, run/run_negft_eval.sh); defaults are the stock e5 setup.
+# RETRIEVER_NAME=splade serves a SPLADE index directory (subsearch/search/splade.py,
+# run/run_splade_eval.sh) instead of a FAISS file; --faiss_gpu is then ignored.
+index_file="${RETRIEVER_INDEX:-$RETRIEVAL_DATA/e5_Flat.index}"
+corpus_file="${RETRIEVER_CORPUS:-$RETRIEVAL_DATA/wiki-18.jsonl}"
+retriever_model="${RETRIEVER_MODEL:-intfloat/e5-base-v2}"
+retriever_name="${RETRIEVER_NAME:-e5}"
 for f in "$index_file" "$corpus_file"; do
     [ -r "$f" ] || { echo "ERROR: cannot read $f"; exit 1; }
 done
@@ -39,8 +45,8 @@ exec python subsearch/search/retrieval_server.py \
     --index_path "$index_file" \
     --corpus_path "$corpus_file" \
     --topk "${RETRIEVER_TOPK:-3}" \
-    --retriever_name e5 \
-    --retriever_model intfloat/e5-base-v2 \
+    --retriever_name "$retriever_name" \
+    --retriever_model "$retriever_model" \
     --port "$RETRIEVER_PORT" \
     --port_tries 100 \
     --host_ip "$RETRIEVER_IP" \
