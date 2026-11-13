@@ -1,0 +1,57 @@
+#!/bin/bash
+#SBATCH --job-name=build-splade-index
+#SBATCH --partition=gpu
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --output=/home/16207041/Negations-in-RAG/logs/%x-%j.out
+#SBATCH --error=/home/16207041/Negations-in-RAG/logs/%x-%j.err
+#
+# Encode a corpus with SPLADE and write a sparse index directory (CSR shards +
+# meta.json) for retrieval_server.py --retriever_name splade. One builder process
+# per GPU, each taking every Nth shard; finished shards are skipped, so resubmitting
+# after a timeout resumes. --finalize then checks every shard and writes meta.json.
+#
+# Env (required): SPLADE_MODEL  HF model name or dir (naver/splade-v3)
+#                 INDEX_CORPUS  jsonl with a "contents" field ("title"\ntext)
+#                 INDEX_DIR     output directory
+# Env (optional): SPLADE_MAX_TERMS (256), SPLADE_SHARD_SIZE (500000), SPLADE_BATCH (128),
+#                 SPLADE_LIMIT (0 = all rows; >0 = sizing run on the first N rows)
+# GPUs, memory and time are set at submission. Host RAM holds one shard per worker
+# (a few GB), not the whole index.
+#
+#   sbatch --gres=gpu:1 --mem=32G --time=01:00:00 \
+#     --export=ALL,SPLADE_MODEL=naver/splade-v3,INDEX_CORPUS=data/custom_index/corpus.jsonl,INDEX_DIR=data/custom_index_splade_v3 \
+#     run/build_splade_index.job
+set -eo pipefail
+cd /home/16207041/Negations-in-RAG
+source run/env.sh
+conda activate "$RETRIEVER_ENV"
+
+: "${SPLADE_MODEL:?set SPLADE_MODEL}"
+: "${INDEX_CORPUS:?set INDEX_CORPUS}"
+: "${INDEX_DIR:?set INDEX_DIR}"
+mkdir -p "$INDEX_DIR"
+IFS=',' read -ra GPUS <<< "${CUDA_VISIBLE_DEVICES:-0}"
+N=${#GPUS[@]}
+echo "node=$(hostname) gpus=${CUDA_VISIBLE_DEVICES:-unset} ($N workers) model=$SPLADE_MODEL corpus=$INDEX_CORPUS -> $INDEX_DIR"
+
+common=(--model "$SPLADE_MODEL" --corpus_path "$INDEX_CORPUS" --index_dir "$INDEX_DIR"
+        --max_length 256 --max_terms "${SPLADE_MAX_TERMS:-256}"
+        --shard_size "${SPLADE_SHARD_SIZE:-500000}" --batch_size "${SPLADE_BATCH:-128}"
+        --limit "${SPLADE_LIMIT:-0}")
+
+pids=()
+for w in "${!GPUS[@]}"; do
+    CUDA_VISIBLE_DEVICES=${GPUS[$w]} python -u subsearch/search/splade_index_builder.py \
+        "${common[@]}" --worker_id "$w" --num_workers "$N" &
+    pids+=($!)
+done
+status=0
+for pid in "${pids[@]}"; do wait "$pid" || status=1; done
+[ "$status" = 0 ] || { echo "a worker failed; finished shards are kept, resubmit to resume"; exit 1; }
+
+python -u subsearch/search/splade_index_builder.py "${common[@]}" --finalize
+printf 'model=%s\ncorpus=%s\nbuilt=%s\njob=%s\n' "$SPLADE_MODEL" "$INDEX_CORPUS" "$(date -Is)" "${SLURM_JOB_ID:-local}" \
+    > "$INDEX_DIR/BUILD_INFO"
+du -sh "$INDEX_DIR"

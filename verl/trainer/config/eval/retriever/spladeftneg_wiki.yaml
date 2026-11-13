@@ -1,0 +1,17 @@
+# @package _global_
+# Fine-tuned SPLADE-v3 on negation pairs only (retriever_finetune model=splade_v3 marco=none:
+# Plackett-Luce on NevIR + NFS train pairs + FLOPS, lambda_d=0.003, no MS MARCO replay;
+# best = highest val pairwise acc). Same setup as the spladeft_* runs minus replay, and the
+# same training data as negft_* (fine-tuned e5). Indexes built by SPLADE_RUN=ftneg
+# run/run_splade_eval.sh with no term cap.
+# wiki-18, top-3, served by a dedicated run/retrieval.job publishing to
+# retriever_url_spladeftneg.txt. Compare with spladeft_wiki and negft_wiki.
+retriever:
+  topk: 3
+
+retriever_server:
+  use_running: true
+  url: null
+  url_file: /home/16207041/Negations-in-RAG/retriever_url_spladeftneg.txt
+  # Long: these jobs queue behind a retriever that first loads the sparse shards.
+  wait_minutes: 120

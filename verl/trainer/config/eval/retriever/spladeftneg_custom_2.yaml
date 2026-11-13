@@ -1,0 +1,17 @@
+# @package _global_
+# Fine-tuned SPLADE-v3 on negation pairs only (retriever_finetune model=splade_v3 marco=none:
+# Plackett-Luce on NevIR + NFS train pairs + FLOPS, lambda_d=0.003, no MS MARCO replay;
+# best = highest val pairwise acc). Same setup as the spladeft_* runs minus replay, and the
+# same training data as negft_* (fine-tuned e5). Indexes built by SPLADE_RUN=ftneg
+# run/run_splade_eval.sh with no term cap.
+# Custom doc1/doc2 corpus (data/custom_index_spladeftneg), top-2 shown 1x.
+# Compare with spladeft_custom_2 (with replay) and negft_custom_2 (fine-tuned e5).
+retriever:
+  topk: 2
+  repeat_docs: 1
+
+retriever_server:
+  index_path: data/custom_index_spladeftneg
+  corpus_path: data/custom_index/corpus.jsonl
+  model_path: /fnwi_fs/ivi/irlab/personal/16207041/retriever_checkpoints/splade-v3-negft-lam0.3-neg2-nomarco/20261101-190055/best
+  name: splade
