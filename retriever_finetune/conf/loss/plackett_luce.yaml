@@ -1,0 +1,9 @@
+# Plackett-Luce likelihood of own doc > partner doc > rest, truncated after two
+# positions:
+#   stage 1: -log softmax(own)                 over all candidates (InfoNCE, partner = hard negative)
+#   stage 2: -log softmax(partner)             over candidates without the own doc
+#   loss    = stage1 + lam * stage2, averaged over q1 and q2 of every pair
+# Stage 2 pulls the query slightly toward the partner while stage 1 pushes it away,
+# so keep lam moderate (0.1-0.5); tune on val pairwise_acc plus nDCG@10.
+tau: 0.01   # E5's temperature, fixed
+lam: 0.3

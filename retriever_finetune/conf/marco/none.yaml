@@ -1,0 +1,3 @@
+# Negation pairs only, no MARCO replay (the original setup).
+enabled: false
+name: nomarco

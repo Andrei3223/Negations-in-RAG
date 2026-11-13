@@ -1,0 +1,74 @@
+# Fine-tune the e5 retriever on negation minimal pairs. Retriever only: no generator,
+# no retrieval server. Loss: two-stage Plackett-Luce (own doc > partner doc > rest) on
+# negation pairs, plus InfoNCE on an equal number of MS MARCO queries mixed into every
+# batch (marco=msmarco_v1; marco=none trains on negation pairs only).
+#
+#   python -m retriever_finetune.prepare_marco                          # once: build MARCO data
+#
+#   python -m retriever_finetune.train                                  # these defaults
+#   python -m retriever_finetune.train loss.lam=0.5 negatives.num_mined=0
+#   python -m retriever_finetune.train trainer.eval_only=true           # base e5 baseline
+#   python -m retriever_finetune.train -m loss.lam=0.1,0.3,0.5          # sweep, one run each
+#
+# SLURM: retriever_finetune/train_e5.job
+
+defaults:
+  - data: nevir_nfs
+  - model: e5_base_v2
+  - loss: plackett_luce
+  - negatives: train_pool
+  - optim: adamw
+  - marco: msmarco_v1
+  - _self_
+
+experiment_name: ${model.short_name}-negft-lam${loss.lam}-neg${negatives.num_mined}-${marco.name}
+seed: 42
+
+trainer:
+  device: auto              # auto = cuda if available, else cpu (CPU only for smoke tests)
+  batch_pairs: 32           # 64 negation queries (+ ~64 MARCO); candidates deduplicated
+  epochs: 10                # 891 train pairs -> 28 steps/epoch
+  max_steps: -1             # > 0 stops early (smoke tests)
+  eval_every: 10            # steps
+  eval_before_train: true   # step-0 val metrics = the untuned e5 baseline
+  test_at_end: true         # evaluate the best checkpoint on the test files
+  eval_only: false          # skip training: evaluate model.name_or_path on val and test
+  bf16: true                # autocast on cuda; ignored on cpu
+  # Best checkpoint: highest monitor, ties broken by monitor_tiebreak. With MARCO on,
+  # only among steps whose marco_monitor is at most marco_max_drop below step 0
+  # (needs eval_before_train); if no trained step qualifies, the base model is kept.
+  monitor: val/all/pairwise_acc
+  monitor_tiebreak: val/all/inbatch_ndcg@10
+  marco_monitor: val/marco/pool_ndcg@10
+  marco_max_drop: 0.01
+  save_checkpoints: true    # best/ and last/ in HF format, loadable by retrieval_server.py
+  output_dir: /fnwi_fs/ivi/irlab/personal/16207041/retriever_checkpoints/${experiment_name}/${now:%Y%m%d-%H%M%S}
+
+eval:
+  # In-batch metrics rank each query's doc against the docs of its own val batch.
+  # Batches are a fixed shuffle (shuffle_seed), so they are identical across steps
+  # and runs. Pool metrics rank against every unique doc of the split. MARCO val
+  # batches hold 2 * batch_pairs queries.
+  batch_pairs: 32
+  shuffle_seed: 0
+  ks: [1, 2, 3, 10]         # recall@k and nDCG@k; agent topk: 2 (custom_2), 3 (wiki)
+  encode_batch_size: 128
+  # With eval_only, test queries are also ranked against this whole corpus, logged as
+  # test_custom/*: the 3,346 doc1/doc2 texts of every split that the agent's
+  # eval/retriever=custom_* servers search. null skips it.
+  custom_corpus: ${oc.env:REPO_ROOT,/home/16207041/Negations-in-RAG}/data/custom_index/corpus.jsonl
+
+wandb:
+  project: e5-negation-retriever
+  entity: null
+  mode: online              # online | offline | disabled
+  tags: []
+
+hydra:
+  run:
+    dir: retriever_finetune/outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: retriever_finetune/outputs/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+  job:
+    chdir: false

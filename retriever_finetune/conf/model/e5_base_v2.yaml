@@ -1,0 +1,17 @@
+# The retriever behind run/retrieval.job. E5 conventions are fixed in model.py:
+# mean pooling over the attention mask, then L2 normalisation.
+type: e5
+short_name: e5   # experiment_name prefix
+name_or_path: intfloat/e5-base-v2
+query_prefix: "query: "
+passage_prefix: "passage: "
+query_max_length: 64
+# NevIR docs reach ~290 tokens. index_builder.py defaults to 180, which truncates
+# them; set this to what the index you deploy into was built with.
+passage_max_length: 256
+# false: one shared encoder, fully fine-tuned (the E5 recipe).
+# true: passages use a frozen copy of the starting weights, so an existing index
+# (wiki-18) stays valid; only the query side learns.
+freeze_passage_encoder: false
+# ~30% more compute; activation memory ~42 GB -> ~5 GB at 4 mined docs per query.
+gradient_checkpointing: true

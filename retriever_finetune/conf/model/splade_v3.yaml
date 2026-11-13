@@ -1,0 +1,40 @@
+# SPLADE-v3 (learned sparse). Encoding is shared with the SPLADE index builder and
+# retrieval server (subsearch/search/splade.py): max over tokens of
+# log(1 + relu(MLM logits)), scored by dot product. No prefixes, no normalisation.
+#
+#   python -m retriever_finetune.train model=splade_v3 trainer.eval_only=true   # base model
+#   python -m retriever_finetune.train model=splade_v3                          # fine-tune
+#
+# Fine-tuning uses the same losses as e5 (Plackett-Luce on negation pairs, InfoNCE on
+# MS MARCO) on raw dot products, plus the FLOPS regulariser below. The passage side
+# changes, so deploying a fine-tuned checkpoint means rebuilding both SPLADE indexes
+# (run/build_splade_index.job with SPLADE_MODEL=<checkpoint>/best).
+#
+# Gated on HF; the path is a safetensors copy (scripts/convert_to_safetensors.py), the
+# same weights the SPLADE retrieval server loads.
+type: splade
+short_name: splade-v3   # experiment_name prefix
+name_or_path: /fnwi_fs/ivi/irlab/personal/16207041/models/splade-v3
+query_max_length: 64
+# Same as the e5 runs and as the custom / wiki-18 SPLADE indexes.
+passage_max_length: 256
+gradient_checkpointing: true
+
+# SPLADE scores are raw dot products (~20 for a match), already on a logit scale, as
+# in SPLADE's own training: no temperature. Overrides loss.tau (e5's 0.01).
+tau: 1.0
+
+# FLOPS regulariser: loss += lambda_q * FLOPS(queries) + lambda_d * FLOPS(passages),
+# FLOPS = sum over vocab terms of (mean weight in the batch)^2. Without it the
+# vectors drift denser during fine-tuning: a bigger, slower index. lambda ramps up
+# quadratically over the first warmup_ratio of steps, as in SPLADE training.
+# Logged: train/flops_*, train/terms_per_*, val/all/terms_per_* (base SPLADE-v3:
+# ~38 terms per query, ~246 per val doc).
+# Scale (32 pairs + MARCO, ~305 candidates): FLOPS_q ~0.42, FLOPS_d ~4.2, so 0.01 adds
+# ~0.05 to a loss of ~1.0. FLOPS is a batch mean: smaller batches give larger values.
+# In a 20-step smoke run, queries went 38 -> 31 terms and val docs 246 -> 251; sweep
+# lambda_d (e.g. 0.003, 0.01, 0.03) if docs keep growing over a full run.
+flops:
+  lambda_q: 0.01
+  lambda_d: 0.01
+  warmup_ratio: 0.3

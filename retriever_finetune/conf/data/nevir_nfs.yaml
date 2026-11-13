@@ -1,0 +1,24 @@
+# Latest cleaned negation pairs: the conflict-filtered build of 2026-09-28
+# (docs/datasets.md). NevIR + negations-free-sentence, the same rows as golden
+# setup 1 (nevir_nfs). The sentence set has no _clean train/validation file: it is
+# cut from negations-free _clean2 and had no conflicts, so these are its latest.
+#
+#   split  NevIR pairs  sentence pairs  total pairs / queries
+#   train          474             417            891 / 1,782
+#   val            118              58            176 / 352
+#   test           662             122            784 / 1,568
+#
+# Each row: question in the prompt, own doc in gold_doc, the pair's other doc in
+# hard_neg_doc. Rows are paired on (data_source, extra_info.pair_id).
+
+root: ${oc.env:REPO_ROOT,/home/16207041/Negations-in-RAG}/data/negations_with_answer_rag
+
+train_files:
+  - ${data.root}/nevir-with-answers/train_clean_docs.parquet
+  - ${data.root}/negations-free-sentence-with-answer/train_docs.parquet
+val_files:
+  - ${data.root}/nevir-with-answers/validation_clean_docs.parquet
+  - ${data.root}/negations-free-sentence-with-answer/validation_docs.parquet
+test_files:
+  - ${data.root}/nevir-with-answers/test_clean_docs.parquet
+  - ${data.root}/negations-free-sentence-with-answer/test_clean_docs.parquet

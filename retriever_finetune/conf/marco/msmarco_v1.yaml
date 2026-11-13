@@ -1,0 +1,26 @@
+# MS MARCO v1 passage replay: general-retrieval queries mixed 1:1 into every batch
+# to limit forgetting. MARCO rows get plain InfoNCE; negation rows keep Plackett-Luce.
+#
+# One-time build (CPU, a few minutes; reads the shared copy, downloads nothing):
+#   python -m retriever_finetune.prepare_marco
+#
+# Caveats:
+# - e5-base-v2 was itself fine-tuned on MS MARCO train, and the val queries below are
+#   held-out MARCO *train* queries. MARCO val therefore measures retention of what e5
+#   already learned (forgetting), not new generalisation. Expect a high baseline.
+# - Web text, not Wikipedia: guards general retrieval, not wiki-18 specifically.
+# - Labels are sparse: a BM25 "negative" is sometimes an unlabelled positive. Absolute
+#   val numbers are pessimistic; compare against the step-0 baseline.
+enabled: true
+name: marco${marco.num_train}
+data_dir: ${oc.env:REPO_ROOT,/home/16207041/Negations-in-RAG}/data/msmarco_retriever
+
+# Training
+loss_weight: 1.0        # L = PL(negation rows) + loss_weight * InfoNCE(MARCO rows)
+hard_negatives: 1       # the triple's BM25 negative per MARCO query; 0 = in-batch only
+
+# Build (prepare_marco.py)
+source_dir: /fnwi_fs/ivi/irlab/projects/SCAI_QRECC/msmarco
+num_train: 1782         # = negation train queries (891 pairs x 2), so batches mix 1:1
+val_negs_per_query: 20  # BM25 negatives kept per val query (of ~1,085 in train-eval)
+seed: 42

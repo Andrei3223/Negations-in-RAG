@@ -1,0 +1,10 @@
+# Mined negatives: once, before training, the untuned encoder ranks every unique
+# train doc for every train query. Each query keeps its top mine_top_k, excluding
+# its own family's docs (its pair, plus NevIR pairs sharing its id prefix). Every
+# step samples num_mined of them per query; they join the batch's candidate set,
+# so each one is a negative for all queries in the batch.
+#
+# Cost: each mined doc is one more passage encoded with gradients. At 32 pairs a
+# step encodes 64 + 64 * num_mined passages (2 -> 192, 4 -> 320). 0 = in-batch only.
+num_mined: 2
+mine_top_k: 30
