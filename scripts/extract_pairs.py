@@ -173,32 +173,64 @@ def build_lookup(
     return dict(lookup)
 
 
-def parse_log(log_path: str) -> list[dict]:
-    """Return ordered list of {golden_answers, extracted_answer} dicts."""
-    records = []
-    with open(log_path) as f:
-        lines = [clean(l) for l in f]
+SAMPLE_RE = re.compile(r"^\[SAMPLE_R\d+_I\d+\]\s*")
+SEPARATOR = "--------------------------------"
+QUOTED_RE = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"")
 
-    i = 0
-    while i < len(lines):
-        if lines[i] == "--------------------------------":
-            j = i + 1
-            golden = None
-            extracted = None
-            while j < len(lines) and j < i + 6:
-                if lines[j].startswith("Golden answers:") and golden is None:
-                    try:
-                        golden = ast.literal_eval(lines[j][len("Golden answers:"):].strip())
-                    except Exception:
-                        pass
-                elif lines[j].startswith("Extracted answer:") and extracted is None:
-                    extracted = lines[j][len("Extracted answer:"):].strip()
-                if golden is not None and extracted is not None:
-                    break
-                j += 1
+
+def parse_gold(text: str) -> list[str]:
+    """Gold answers from a logged list, in either repr.
+
+    Python lists print as ['a', 'b']; the numpy arrays newer logs print have no
+    commas, ['a' 'b'], which ast.literal_eval silently joins into 'ab'. So read
+    each quoted item on its own (numpy switches to "..." around apostrophes).
+    """
+    return [ast.literal_eval(tok) for tok in QUOTED_RE.findall(text)]
+
+
+def parse_log(log_path: str) -> list[dict]:
+    """Return ordered list of {golden_answers, extracted_answer} dicts.
+
+    Two log formats:
+      old: a bare separator line, then "Golden answers:" and "Extracted answer:"
+           within the next few lines (one block per record);
+      new: every line prefixed "[SAMPLE_R<r>_I<i>] ", and a multi-line
+           "Reasoning Trace:" between the separator and "Extracted answer:",
+           which now comes BEFORE "Golden answers:".
+    A record is emitted once both fields have been seen since the last
+    separator, in whichever order they appear. A long gold list wraps onto
+    continuation lines (numpy line width), so it is read until its closing "]".
+    """
+    records = []
+    golden = extracted = None
+    gold_buf = None            # an unfinished, wrapped "Golden answers:" list
+    in_block = False
+    with open(log_path) as f:
+        for raw in f:
+            line = SAMPLE_RE.sub("", clean(raw))
+            if gold_buf is not None:
+                gold_buf += " " + line
+                if line.endswith("]") or gold_buf.count("\n") > 20:
+                    golden, gold_buf = parse_gold(gold_buf), None
+            elif line.startswith(SEPARATOR):
+                # startswith, not ==: Ray streams worker output asynchronously, so
+                # another process's print can land on the same line (seen once:
+                # "...----Stopping retrieval server (PID ...)").
+                in_block, golden, extracted = True, None, None
+                continue
+            elif not in_block:
+                continue
+            elif line.startswith("Golden answers:") and golden is None:
+                text = line[len("Golden answers:"):].strip()
+                if text.endswith("]"):
+                    golden = parse_gold(text)
+                else:
+                    gold_buf = text
+            elif line.startswith("Extracted answer:") and extracted is None:
+                extracted = line[len("Extracted answer:"):].strip()
             if golden is not None and extracted is not None:
                 records.append({"golden_answers": golden, "extracted_answer": extracted})
-        i += 1
+                in_block, golden, extracted = False, None, None
 
     return records
 

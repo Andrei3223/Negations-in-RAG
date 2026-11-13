@@ -34,18 +34,31 @@ LOGS = BASE / 'eval_logs'
 sys.path.insert(0, str(BASE / 'scripts'))
 from parse_eval_log import parse_file  # noqa: E402
 
-RUN_RE = re.compile(r'^(nevir|nfs|nfwa)-(searchr1|subsearch)-([a-z0-9_]+)-r(\d+)-(\d+)$')
+RUN_RE = re.compile(r'^(nevir|nfs|nfwa|nq|hotpotqa)-([a-z0-9]+)-([a-z0-9_]+)-r(\d+)-(\d+)$')
 ANSI = re.compile(r'\x1b\[[0-9;]*m')
 PID = re.compile(r'\([a-z_]+ pid=\d+\)')
 
 DS_NAME = {'nevir': 'nevir-with-answers', 'nfs': 'negations-free-sentence-with-answer',
-           'nfwa': 'negations-free-with-answer'}
+           'nfwa': 'negations-free-with-answer',
+           'nq': 'NQ test (1,000-question subset)', 'hotpotqa': 'HotpotQA dev (1,000-question subset)'}
 RETR_DESC = {
     'wiki': 'live e5 retrieval over wiki-18, top-3',
     'wiki_5': 'live e5 retrieval over wiki-18, top-5',
     'custom': 'live e5 retrieval over the custom doc1/doc2 corpus, top-1 (single passage; see caveat)',
     'custom_2': 'live e5 retrieval over the custom corpus, top-2 (second hit often the pair\'s other half)',
     'custom_x2': 'live e5 retrieval over the custom corpus, top-1 shown twice',
+    'negft_custom_2': 'fine-tuned e5 (e5-negft-lam0.3-neg2) over the re-encoded custom corpus, top-2',
+    'negft_custom_x2': 'fine-tuned e5 over the re-encoded custom corpus, top-1 shown twice',
+    'negft_wiki': 'fine-tuned e5 over re-encoded wiki-18, top-3',
+    'splade_custom_2': 'SPLADE-v3 over the custom corpus (sparse index), top-2',
+    'splade_custom_x2': 'SPLADE-v3 over the custom corpus, top-1 shown twice',
+    'splade_wiki': 'SPLADE-v3 over wiki-18 (sparse index), top-3',
+    'spladeft_custom_2': 'fine-tuned SPLADE-v3 (negation pairs + MARCO, lambda_d=0.003) over the custom corpus, top-2',
+    'spladeft_custom_x2': 'fine-tuned SPLADE-v3 over the custom corpus, top-1 shown twice',
+    'spladeft_wiki': 'fine-tuned SPLADE-v3 over re-encoded wiki-18, top-3',
+    'spladeftneg_custom_2': 'SPLADE-v3 fine-tuned on negation pairs only (no MARCO, lambda_d=0.003) over the custom corpus, top-2',
+    'spladeftneg_custom_x2': 'SPLADE-v3 fine-tuned on negation pairs only over the custom corpus, top-1 shown twice',
+    'spladeftneg_wiki': 'SPLADE-v3 fine-tuned on negation pairs only over re-encoded wiki-18, top-3',
     'running': 'live wiki-18 retrieval via an already-running server',
     'golden': 'no retrieval: gold document shown `golden_copies` times',
     'golden1': 'no retrieval: gold document shown once (old runs; see caveat)',
@@ -220,7 +233,7 @@ def main():
     w('## Summary by experiment (mean ± sd over repeats)\n')
     w('| dataset | model | retriever | repeats (complete/total) | seeds | rows | empty answers | EM | pair acc | F1 | BERTScore | pair BERT |')
     w('|---|---|---|---|---|---|---|---|---|---|---|---|')
-    order = {'nfwa': 0, 'nfs': 1, 'nevir': 2}
+    order = {'nfwa': 0, 'nfs': 1, 'nevir': 2, 'nq': 3, 'hotpotqa': 4}
     for (ds, mt, retr), rs in sorted(groups.items(), key=lambda kv: (order[kv[0][0]], kv[0][1], kv[0][2])):
         g = lambda k: [x['metrics'].get(k) for x in rs]
         b = lambda k: [x['bert'][k] for x in rs if x['bert'] is not None]
@@ -235,7 +248,7 @@ def main():
 
     # --- every run ---
     w('## All runs\n')
-    for ds in ('nfwa', 'nfs', 'nevir'):
+    for ds in ('nfwa', 'nfs', 'nevir', 'nq', 'hotpotqa'):
         rs = sorted([r for r in runs if r['ds'] == ds], key=lambda r: (r['model_tag'], r['retr'], r['job'], r['rep']))
         if not rs:
             continue

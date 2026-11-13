@@ -60,11 +60,29 @@ DS = {
         "src_split": "test_clean2",
         "expected": 1176,
     },
+    # Open-domain QA regression sets (scripts/data_process/make_qa_eval_subsets.py): no
+    # pairs, so the pair / positive / negated columns come out empty. Always aligned
+    # positionally (below), never through build_lookup.
+    "nq": {"dataset": "nq", "eval_parquet": "data/qa_eval/nq_test_1k.parquet",
+           "src_split": None, "expected": 1000, "paired": False},
+    "hotpotqa": {"dataset": "hotpotqa", "eval_parquet": "data/qa_eval/hotpotqa_dev_1k.parquet",
+                 "src_split": None, "expected": 1000, "paired": False},
 }
+DS_LABEL = {"nevir": "nevir", "nfs": "neg-free-sent", "nfwa": "neg-free",
+            "nq": "nq", "hotpotqa": "hotpotqa"}
 
 # Run name: <ds>-<model>-<retr>-r<rep>-<jobid>, one folder per run:
 #   eval_logs/<name>/eval.log   (written by run/eval_negations_with_answers.sh)
-RUN_RE = re.compile(r"^(nevir|nfs|nfwa)-(searchr1|subsearch)-(wiki|wiki_5|custom|custom_2|custom_x2|running|golden|golden1|golden_hn|golden_rn)-r(\d+)-(\d+)$")
+# Model and retriever tags are free-form (searchr1, subsearch, exp1, ...; wiki, custom_2,
+# golden_hn, ...), so they are matched generically; neither may contain "-".
+RUN_RE = re.compile(r"^(nevir|nfs|nfwa|nq|hotpotqa)-([a-z0-9]+)-([a-z0-9_]+)-r(\d+)-(\d+)$")
+ACTIVE_RE = re.compile(r"ACTIVE_TRAJ_NUM: \[(\d+)")
+
+
+def rows_evaluated(log_path):
+    """Rows the run actually evaluated: first entry of every ACTIVE_TRAJ_NUM line."""
+    with open(log_path, errors="ignore") as f:
+        return sum(int(m.group(1)) for m in ACTIVE_RE.finditer(f.read()))
 
 
 def _log_paths():
@@ -87,19 +105,72 @@ def discover_runs():
     return runs
 
 
+def _targets(df):
+    return [[str(t) for t in r["ground_truth"]["target"]] for r in df["reward_model"]]
+
+
+def positional_rows(run, raw):
+    """Align logged records to the run's own eval file by position, or None.
+
+    Runs launched through run/eval.py save their config, so the exact file they
+    evaluated is known; validation goes through it in order (no shuffle, nothing
+    dropped), so record i is row i. Every row's gold answer must match the log, else
+    None and the caller falls back to answer-based matching. Runs evaluated before a
+    dataset was curated are matched against the pre_conflict_filter/ copy.
+    """
+    cfg_path = Path(run["path"]).parent / ".hydra" / "config.yaml"
+    if not cfg_path.exists():
+        return None
+    m = re.search(r"\n  val_files: (\S+)", cfg_path.read_text())
+    if not m:
+        return None
+    val = BASE_DIR / m.group(1)
+    for cand in (val, val.parent / "pre_conflict_filter" / val.name):
+        if not cand.exists():
+            continue
+        df = pd.read_parquet(cand)
+        if len(df) != len(raw):
+            continue
+        if any(r["golden_answers"] != t for r, t in zip(raw, _targets(df))):
+            continue
+        infos = [e if isinstance(e, dict) else {} for e in df["extra_info"]]
+        return [{"pair_id": str(i.get("pair_id")) if i.get("pair_id") is not None else None,
+                 "query_role": i.get("query_role"),
+                 "extracted_answer": r["extracted_answer"],
+                 "golden_answers": t}
+                for r, i, t in zip(raw, infos, _targets(df))]
+    return None
+
+
 def extract_run(run):
     """Return list of record dicts for one run, or None if incomplete."""
     cfg = DS[run["ds_tag"]]
     raw = parse_log(run["path"])
-    if len(raw) < cfg["expected"]:
-        print(f"  SKIP {run['label']}: {len(raw)}/{cfg['expected']} records (incomplete)")
+    # Complete = an answer logged for every row the run evaluated. Old logs print each
+    # row twice and new ones once, so compare against the run's own row count; the
+    # per-dataset "expected" is only a fallback for logs without ACTIVE_TRAJ_NUM.
+    with open(run["path"], errors="ignore") as f:
+        finished = "Initial validation metrics" in f.read()
+    if not finished:
+        print(f"  SKIP {run['label']}: run did not finish (no final metrics in its log)")
         return None
-    valid_ids = valid_pair_ids_from_eval_parquet(cfg["eval_parquet"])
-    lookup = build_lookup(cfg["dataset"], valid_ids, cfg["src_split"])
-    matched = match_records(raw, lookup)
+    need = rows_evaluated(run["path"]) or cfg["expected"]
+    if len(raw) < need:
+        print(f"  SKIP {run['label']}: {len(raw)}/{need} records (incomplete)")
+        return None
+    paired = cfg.get("paired", True)
+    matched = positional_rows(run, raw)
+    if matched is None:
+        if not paired:
+            print(f"  SKIP {run['label']}: log does not align with its eval file")
+            return None
+        # Pre-Hydra logs (each row printed twice): match by gold answer, as before.
+        valid_ids = valid_pair_ids_from_eval_parquet(cfg["eval_parquet"])
+        lookup = build_lookup(cfg["dataset"], valid_ids, cfg["src_split"])
+        matched = match_records(raw, lookup)
     rows = []
     for r in matched:
-        if r["query_role"] not in ("q1", "q2"):
+        if paired and r["query_role"] not in ("q1", "q2"):
             continue
         rows.append({
             "label": run["label"], "ds_tag": run["ds_tag"], "dataset": cfg["dataset"],
@@ -123,8 +194,11 @@ def metrics_for_run(gdf, dataset):
     bs_pairs = accumulate_pair_scores(gdf, "bs_f1")
     em_pairs = accumulate_pair_scores(gdf, "em")
     total_ids, complete, pair_frac = pair_coverage(bs_pairs)
-    bs_pi, _ = per_instance_score(bs_pairs, THRESHOLD)
-    em_pi, _ = per_instance_score(em_pairs, threshold=1.0)
+    if complete:
+        bs_pi, _ = per_instance_score(bs_pairs, THRESHOLD)
+        em_pi, _ = per_instance_score(em_pairs, threshold=1.0)
+    else:   # unpaired dataset (nq, hotpotqa)
+        bs_pi = em_pi = float("nan")
 
     return {
         "EM_all": mean(gdf["em"]),       "EM_pos": split_mean("em", pos_role),       "EM_neg": split_mean("em", neg_role),
@@ -163,6 +237,11 @@ def main():
     # "<answer> Beijing </answer>" as model output. No gold answer in these
     # datasets contains Beijing, so it only ever marks a missing answer here.
     df["empty"] = [1.0 if str(h).strip() in ("", "None", "Beijing") else 0.0 for h in hyps]
+    # A missing answer scores 0, as in EM and F1. BERTScore itself would give the
+    # placeholder text "None" ~0.29 and "Beijing" ~0.27 -- more than a real wrong
+    # answer typically gets (~0.1) -- and an empty string ~-4.9, so unanswered rows
+    # would otherwise inflate (or wreck) the mean.
+    df.loc[df["empty"] == 1.0, "bs_f1"] = 0.0
 
     METRICS = ["EM_all", "EM_pos", "EM_neg", "tokF1_all", "tokF1_pos", "tokF1_neg",
                "BERT_all", "BERT_pos", "BERT_neg", "PI_BERT", "PI_EM",
@@ -204,7 +283,7 @@ def main():
     print("| Dataset | Model | Retr. | n | EM all | EM pos | EM neg | tokF1 all | tokF1 pos | tokF1 neg | BERT all | BERT pos | BERT neg | PI-BERT |")
     print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for _, r in agg_df.iterrows():
-        ds = "nevir" if r["ds_tag"] == "nevir" else "neg-free-sent"
+        ds = DS_LABEL.get(r["ds_tag"], r["ds_tag"])
         print(
             f"| {ds} | {r['model']} | {r['retr']} | {int(r['n_reps'])} | "
             f"{fmt(r['EM_all_mean'], r['EM_all_std'])} | {fmt(r['EM_pos_mean'], r['EM_pos_std'])} | {fmt(r['EM_neg_mean'], r['EM_neg_std'])} | "

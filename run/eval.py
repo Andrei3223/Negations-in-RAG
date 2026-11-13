@@ -47,24 +47,52 @@ def _wait_for_server(port: int, proc: subprocess.Popen, timeout: int = 1800):
     sys.exit("ERROR: retrieval server did not start in time")
 
 
-def _resolve_running_url(rs) -> str:
-    """Endpoint of an already-running retriever, from rs.url or the file retrieval.job publishes."""
+def _read_running_url(rs) -> str:
+    """Endpoint from rs.url, else from the file retrieval.job publishes; "" if none yet."""
     url = rs.get("url")
     if not url:
-        with open(rs.url_file) as f:
-            url = f.read().strip()
+        try:
+            with open(rs.get("url_file")) as f:
+                url = f.read().strip()
+        except FileNotFoundError:
+            url = ""
     if not url:
-        sys.exit(f"ERROR: no retriever endpoint in {rs.url_file}")
+        return ""
     if not url.startswith("http"):
         url = f"http://{url}"
     url = url.rstrip("/")
     if url.endswith("/retrieve"):
         url = url[: -len("/retrieve")]
-    try:
-        requests.post(f"{url}/retrieve", json={"queries": ["test"], "topk": 1}, timeout=30).raise_for_status()
-    except Exception as e:
-        sys.exit(f"ERROR: running retriever at {url} did not answer ({e}). Is retrieval.job still up?")
     return url
+
+
+def _resolve_running_url(rs) -> str:
+    """Endpoint of an already-running retriever, waiting up to rs.wait_minutes for it.
+
+    url_file is re-read on every attempt: until a freshly started retrieval.job has
+    loaded its index (15-30 min for wiki-18) the file still names the previous,
+    dead server, and the new server only overwrites it once its port is bound.
+    """
+    deadline = time.time() + 60 * float(rs.get("wait_minutes", 0))
+    attempt, last_err, url = 0, "no endpoint published yet", ""
+    while True:
+        attempt += 1
+        url = _read_running_url(rs)
+        if url:
+            try:
+                requests.post(f"{url}/retrieve", json={"queries": ["test"], "topk": 1},
+                              timeout=30).raise_for_status()
+                if attempt > 1:
+                    print(f"Running retriever at {url} answered after {attempt} attempts.")
+                return url
+            except Exception as e:
+                last_err = f"{url} did not answer ({e})"
+        if time.time() >= deadline:
+            sys.exit(f"ERROR: running retriever: {last_err}. Is retrieval.job up? "
+                     f"(endpoint file: {rs.get('url_file')})")
+        if attempt == 1:
+            print(f"Waiting up to {rs.get('wait_minutes')} min for the running retriever ({last_err})...")
+        time.sleep(30)
 
 
 @hydra.main(config_path="../verl/trainer/config", config_name="eval", version_base=None)
